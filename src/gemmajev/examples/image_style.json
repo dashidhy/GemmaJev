@@ -1,0 +1,11 @@
+{
+  "task": "Assign the most specific style tag to the attached image. Judge visual appearance, regardless of how the image was created.",
+  "state": "The attached image is the item to tag.",
+  "query": "Which style tag best describes this image?",
+  "options": {
+    "photography": "Camera-like photography or a photorealistic image.",
+    "artwork": "Painting, sketch, or illustration without anime/cartoon styling.",
+    "anime": "Anime, manga, or cel-shaded 2D cartoon illustration.",
+    "other": "A diagram, chart, document, screenshot, or another style."
+  }
+}

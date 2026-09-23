@@ -37,11 +37,16 @@ def _run(argv: list[str] | None = None) -> int:
     setup = commands.add_parser("setup", help="Build the runtime and download a verified model")
     setup.add_argument("--model", choices=(*MODELS, "all"), default="12b")
     setup.add_argument("--workspace", type=Path)
-    commands.add_parser("build", help="Download and compile the pinned text runtime")
+    setup.add_argument("--vision", action="store_true", help="Also prepare the image projector")
+    build = commands.add_parser("build", help="Download and compile the pinned runtime")
+    build.add_argument("--vision", action="store_true", help="Build the separate vision worker")
+    build.add_argument("--workspace", type=Path)
     decide = commands.add_parser("decide", help="Score an API JSON request; '-' reads stdin")
     decide.add_argument("request", help="Request JSON file, or -")
     decide.add_argument("--model", choices=MODELS, default="12b")
     decide.add_argument("--workspace", type=Path)
+    decide.add_argument("--image", type=Path, help="Condition on one image using the vision worker")
+    decide.add_argument("--image-tokens", type=int, choices=(70, 140, 280, 560, 1120), default=70)
     demo = commands.add_parser("demo", help="Open the local interactive Playground")
     demo.add_argument("--model", choices=MODELS, default="12b")
     demo.add_argument("--workspace", type=Path)
@@ -50,33 +55,46 @@ def _run(argv: list[str] | None = None) -> int:
     commands.add_parser("benchmark", help="Prepare, run, verify and report the text benchmarks")
     args = parser.parse_args(argv)
     if args.command == "build":
-        print(build_runtime())
+        build_options = {"vision": True} if args.vision else {}
+        if args.workspace is not None:
+            build_options["workspace"] = args.workspace
+        print(build_runtime(**build_options))
     elif args.command == "setup":
         hardware = check_platform()
         print(f"macOS · {hardware['chip']} · {hardware['memory_bytes'] / 2**30:.0f} GiB")
         root = workspace_root(args.workspace)
+        vision_options = {"vision": True} if args.vision else {}
         build_runtime(root)
+        if args.vision:
+            build_runtime(root, vision=True)
         for model in MODELS if args.model == "all" else (args.model,):
             print(f"Preparing {model}…", flush=True)
-            print(prepare_model(model, root))
+            print(prepare_model(model, root, **vision_options))
         command = [
-            "uv",
-            "run",
-            "gemmajev",
-            "demo",
-            "--model",
-            "12b" if args.model == "all" else args.model,
+            "uv", "run", "gemmajev", "demo" if args.vision else "setup",
+            "--model", "12b" if args.model == "all" else args.model,
         ]
+        if not args.vision:
+            command.append("--vision")
         if args.workspace is not None:
             command += ["--workspace", str(root)]
-        print(f"Ready. Run: {shlex.join(command)}")
+        print(f"{'Ready. Run' if args.vision else 'To open Playground'}: {shlex.join(command)}")
     elif args.command == "decide":
         from .engine import GemmaJev
         from .request import validate_request
 
         request = validate_request(read_request(args.request))
-        with GemmaJev(model=args.model, workspace=args.workspace) as model:
-            probabilities = model.decide(request)
+        engine_options = (
+            {"vision": True, "image_tokens": args.image_tokens} if args.image is not None else {}
+        )
+        model = GemmaJev(model=args.model, workspace=args.workspace, **engine_options)
+        try:
+            if args.image is None:
+                probabilities = model.decide(request)
+            else:
+                probabilities = model.decide(request, image_path=args.image)
+        finally:
+            model.close()
         print(json.dumps(probabilities, ensure_ascii=False, indent=2, allow_nan=False))
     elif args.command == "demo":
         from .demo import launch

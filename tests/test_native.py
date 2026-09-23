@@ -57,6 +57,7 @@ def test_worker_provenance_and_non_generating_template(binary):
         ["--ctx-size", "513"],
         ["--ctx-size", "4000oops"],
         ["--threads", "0"],
+        ["--image-tokens", "71"],
         ["--unknown", "1"],
     ],
 )
@@ -66,3 +67,22 @@ def test_invalid_configuration_rejected_before_model_load(binary, arguments):
     result = json.loads(response.stdout)
     assert result["ready"] is False
     assert "load" not in result["error"]
+
+
+def test_vision_worker_has_isolated_build_and_image_patch():
+    vision = ROOT / ".runtime/build/bin/gemmajev-vision-worker"
+    if not vision.is_file():
+        pytest.skip("Build with GEMMAJEV_VISION=1 to check the optional image worker")
+    response = invoke(vision, "--self-test")
+    assert response.returncode == 0 and not response.stderr
+    result = json.loads(response.stdout)
+    assert result["vision_build"] is True
+    assert result["worker_source_sha256"] == hashlib.sha256(
+        (ROOT / "native/gemmajev.cpp").read_bytes()
+    ).hexdigest()
+    assert result["runtime_patches"][-1] == {
+        "name": "gemma4-image-budget.patch",
+        "sha256": hashlib.sha256(
+            (ROOT / "native/patches/gemma4-image-budget.patch").read_bytes()
+        ).hexdigest(),
+    }

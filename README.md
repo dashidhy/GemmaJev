@@ -1,6 +1,6 @@
 # GemmaJev
 
-A simplified functionality reproduction of [Jev-style decisions](https://docs.typesafe.ai/introduction) with Gemma 4. Finetuning free, runs locally on your machine.
+A simplified functionality reproduction of [Jev-style decisions](https://docs.typesafe.ai/introduction) with Gemma 4. Native multi-modal ability, finetuning free, runs locally on your machine.
 
 > **Disclaimer** - GemmaJev is NOT a full reproduction of TypeSafe's original Jev; see [Limitations](#limitations). This project is developed through ~100% vibe coding (powered by Codex w/ GPT-6 Astra). While tested, the code and documentation may contain critical bugs, hallucinations, or inaccuracies. Use at your own risk and verify critical results independently. If you encounter any problem, feel free to open an [issue](../../issues).
 
@@ -77,6 +77,10 @@ B = {option_id}: {option_description}
 }
 ```
 
+### Multi-modal inputs
+
+GemmaJev uses Gemma 4's native visual encoder to make decisions about images, such as classifying their content or visual style. The same `task`, `state`, `query` and `options` fields define the decision; the image is supplied separately. The output remains a probability mapping over the supplied option IDs.
+
 ## Benchmark Results
 
 The release preserves **9,176 measured decisions across 13 datasets**, with 4,588 examples per model. Both configurations use the same final interface. Detailed protocols, source revisions and metric definitions are in [Benchmarks](docs/benchmarks.md); the [compact result archive](docs/results/summary.json) can be verified without loading a model.
@@ -136,10 +140,10 @@ From a source checkout:
 
 ```bash
 uv sync --locked --extra data
-uv run gemmajev setup --model 12b
+uv run gemmajev setup --model 12b --vision
 ```
 
-Setup downloads and builds the pinned text-only llama.cpp runtime, then downloads and verifies the selected model. Model downloads are approximately **4.80 GiB for E4B** and **6.50 GiB for 12B**, plus runtime source/build space. Use `--model e4b` for E4B, or `--model all` to prepare both.
+Setup downloads and builds the pinned llama.cpp runtime, then downloads and verifies the selected model. `--vision` prepares both text and image workers plus the matching projector, as required by the Playground. Model downloads are approximately **4.80 GiB for E4B** and **6.50 GiB for 12B**, plus a **946 MiB / 167 MiB** projector respectively and runtime source/build space. Use `--model e4b` for E4B, or `--model all` to prepare both. Omit `--vision` for text-only API use.
 
 | Local directory | Contents |
 | --- | --- |
@@ -157,7 +161,7 @@ uv run gemmajev demo --model 12b
 
 This launches a **GemmaJev Playground** with examples in your browser at `http://127.0.0.1:7860`. You can also edit the fields to test your own cases.
 
-![GemmaJev Playground: editing a request changes the option probabilities](docs/images/playground.png)
+![GemmaJev Playground: image style tagging with editable options](docs/images/playground.png)
 
 ### Python and JSON API
 
@@ -185,6 +189,37 @@ The same request can be supplied as a JSON file or via stdin:
 ```bash
 uv run gemmajev decide src/gemmajev/examples/evidence_check.json --model 12b
 uv run gemmajev decide - --model 12b < request.json
+```
+
+For image input, prepare the model with `setup --model 12b --vision` as above, then enable vision and pass the image separately:
+
+```python
+from gemmajev import GemmaJev
+
+request = {
+    "task": "Assign the most specific style tag to the attached image. Judge visual appearance, regardless of how the image was created.",
+    "state": "The attached image is the item to tag.",
+    "query": "Which style tag best describes this image?",
+    "options": {
+        "photography": "Camera-like photography or a photorealistic image.",
+        "artwork": "Painting, sketch, or illustration without anime/cartoon styling.",
+        "anime": "Anime, manga, or cel-shaded 2D cartoon illustration.",
+        "other": "A diagram, chart, document, screenshot, or another style."
+    }
+}
+
+with GemmaJev(model="12b", vision=True) as model:
+    probabilities = model.decide(
+        request, image_path="src/gemmajev/examples/images/sample_4.png"
+    )
+    print(probabilities)
+```
+
+The same image-style request is available as a bundled JSON file. `--image` automatically selects the vision runtime; the image path is not a field in the request JSON:
+
+```bash
+uv run gemmajev decide src/gemmajev/examples/image_style.json --model 12b \
+  --image src/gemmajev/examples/images/sample_4.png
 ```
 
 ### Benchmark
@@ -236,6 +271,6 @@ GemmaJev is released under the [MIT License](LICENSE). Model weights, datasets a
 
 - [TypeSafe Jev](https://docs.typesafe.ai/introduction).
 - [Google Gemma](https://ai.google.dev/gemma/docs) and its [model terms](https://ai.google.dev/gemma/terms); checkpoint versions and hashes are pinned in [models.toml](src/gemmajev/models.toml).
-- [llama.cpp](https://github.com/ggml-org/llama.cpp); see the [text runtime notes](native/README.md) for the pinned revision and required raw-logits patch.
+- [llama.cpp](https://github.com/ggml-org/llama.cpp); see the [runtime notes](native/README.md) for the pinned revision and required patches.
 - [AnyJev](https://github.com/nokia-applied-research/AnyJev), [SemIf](https://github.com/TheoLeeCJ/SemIf), and [Laya Typed Decisions](https://huggingface.co/convaiinnovations/laya-typed-decisions).
 - [Benchmark data and result provenance](docs/benchmarks.md). Models and datasets retain their upstream licenses.

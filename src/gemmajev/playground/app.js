@@ -8,6 +8,13 @@ let selectedExample = null;
 let currentModel = "12b";
 let busy = true;
 let lastResult = null;
+let imageSamples = [];
+let currentImage = null;
+let imageRevision = 0;
+
+function exampleHasImage(example = selectedExample) {
+  return Boolean(example?.image_id);
+}
 
 function setStatus(message, kind = "ready") {
   const status = $("run-status");
@@ -26,7 +33,14 @@ function syncControls() {
     button.disabled = busy || count <= 2;
   });
   $("restore-example").disabled = busy || selectedExample === null;
+  const imageEnabled = exampleHasImage();
+  $("image-panel").querySelectorAll("button, input").forEach((control) => {
+    control.disabled = busy || !imageEnabled;
+  });
+  $("clear-image").disabled = busy || !imageEnabled || currentImage === null;
+  $("image-panel").setAttribute("aria-disabled", String(!imageEnabled));
   $("input-panel").setAttribute("aria-busy", String(busy));
+  $("image-panel").setAttribute("aria-busy", String(busy));
 }
 
 function setBusy(value) {
@@ -65,7 +79,7 @@ function edited() {
   }
   let matches = false;
   try {
-    matches = lastResult.model === currentModel && JSON.stringify(getRequest()) === JSON.stringify(lastResult.request);
+    matches = lastResult.model === currentModel && (lastResult.image_id || null) === (currentImage?.id || null) && JSON.stringify(getRequest()) === JSON.stringify(lastResult.request);
   } catch {
     // An incomplete edit still makes the old result stale; validate on Run.
   }
@@ -123,7 +137,71 @@ function labelOptions() {
   });
 }
 
-function selectExample(example) {
+function clearResult() {
+  lastResult = null;
+  renderResult(null);
+}
+
+function clearImage(message = exampleHasImage()
+  ? "No image attached"
+  : "This example uses text only. Select Image style to add an image.") {
+  imageRevision += 1;
+  currentImage = null;
+  $("image-preview").removeAttribute("src");
+  $("image-preview").hidden = true;
+  $("image-placeholder").textContent = message;
+  $("image-placeholder").hidden = false;
+  document.querySelectorAll(".image-sample").forEach((button) => button.setAttribute("aria-pressed", "false"));
+  return imageRevision;
+}
+
+function localImageURL(value) {
+  const url = new URL(value, window.location.origin);
+  if (url.origin !== window.location.origin || !url.pathname.startsWith("/api/images/")) {
+    throw new Error("The image must come from this Playground.");
+  }
+  return url.href;
+}
+
+async function displayImage(selection, revision) {
+  const preview = new Image();
+  preview.id = "image-preview";
+  preview.alt = selection.title || "Uploaded image";
+  preview.src = localImageURL(selection.url);
+  try {
+    await preview.decode();
+  } catch {
+    throw new Error("Could not load the image. Check that the Playground server is running, then try again.");
+  }
+  if (revision !== imageRevision) return;
+  $("image-preview").replaceWith(preview);
+  $("image-placeholder").hidden = true;
+  currentImage = {id: selection.id || selection.image_id, url: selection.url};
+  document.querySelectorAll(".image-sample").forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.image === currentImage.id));
+  });
+}
+
+async function chooseImage(selection) {
+  if (!exampleHasImage()) return;
+  clearResult();
+  const revision = clearImage("Loading image…");
+  setBusy(true);
+  setStatus("Loading image…", "running");
+  try {
+    await displayImage(selection, revision);
+    if (revision === imageRevision) setStatus("Ready to run.");
+  } catch (error) {
+    if (revision === imageRevision) {
+      $("image-placeholder").textContent = error.message;
+      setStatus(error.message, "error");
+    }
+  } finally {
+    if (revision === imageRevision) setBusy(false);
+  }
+}
+
+async function selectExample(example) {
   selectedExample = example;
   for (const name of fields) {
     $(name).value = example.request[name];
@@ -132,13 +210,22 @@ function selectExample(example) {
   $("option-rows").replaceChildren();
   for (const [id, description] of Object.entries(example.request.options)) addOption(id, description);
   $("options-scroll").scrollTop = 0;
-  lastResult = null;
-  renderResult(null);
+  clearResult();
+  clearImage();
   document.querySelectorAll(".example-button").forEach((button) => {
     button.setAttribute("aria-pressed", String(button.dataset.example === example.id));
   });
+  if (example.image_id) {
+    const sample = imageSamples.find((item) => item.id === example.image_id);
+    if (sample) {
+      await chooseImage(sample);
+      return;
+    }
+    setStatus("The example image is unavailable. Upload an image to continue.", "error");
+  } else {
+    setStatus("Ready to run.");
+  }
   syncControls();
-  setStatus("Ready to run.");
 }
 
 function sameOptions(first, second) {
@@ -174,7 +261,7 @@ function renderResult(result, previous = null) {
   winner.textContent = selected[0];
   winner.title = selected[0];
   $("result-meta").textContent = `Gemma 4 ${result.model.toUpperCase()} · ${(result.request_ms / 1000).toFixed(2)} s`;
-  const comparable = previous && sameOptions(result.request.options, previous.request.options);
+  const comparable = previous && (result.image_id || null) === (previous.image_id || null) && sameOptions(result.request.options, previous.request.options);
   for (const [id, probability] of probabilities) {
     const row = document.createElement("div");
     row.className = "probability-row";
@@ -213,6 +300,10 @@ async function api(path, body) {
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(body),
   });
+  return readResponse(response);
+}
+
+async function readResponse(response) {
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || "The request could not be completed.");
   return data;
@@ -224,6 +315,9 @@ $("input-panel").addEventListener("submit", async (event) => {
   if (busy) return;
   let request;
   try {
+    if (exampleHasImage() && !currentImage) {
+      throw new Error("Choose a sample or upload an image before running Image style.");
+    }
     request = getRequest();
   } catch (error) {
     setStatus(error.message + (lastResult ? " Previous result shown." : ""), "error");
@@ -232,7 +326,7 @@ $("input-panel").addEventListener("submit", async (event) => {
   setBusy(true);
   setStatus("Running…", "running");
   try {
-    const result = await api("/api/decide", {model: currentModel, request});
+    const result = await api("/api/decide", {model: currentModel, request, ...(currentImage ? {image_id: currentImage.id} : {})});
     renderResult(result, lastResult);
     lastResult = result;
     setStatus("Ready · result matches this input.");
@@ -249,13 +343,130 @@ $("add-option").addEventListener("click", () => {
   edited();
 });
 $("restore-example").addEventListener("click", () => {
-  if (!busy && selectedExample) selectExample(selectedExample);
+  if (!busy && selectedExample) void selectExample(selectedExample);
 });
+
+async function imageDimensions(file) {
+  // Decode only bounded still images. A small compressed file can otherwise
+  // allocate a very large bitmap before the canvas resize happens.
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const view = new DataView(bytes.buffer);
+  let width;
+  let height;
+  const pngSignature = [137, 80, 78, 71, 13, 10, 26, 10];
+  if (bytes.length >= 33 && pngSignature.every((value, index) => bytes[index] === value)) {
+    if (view.getUint32(8) !== 13 || String.fromCharCode(...bytes.slice(12, 16)) !== "IHDR") {
+      throw new Error("This file does not contain a valid PNG image header.");
+    }
+    width = view.getUint32(16);
+    height = view.getUint32(20);
+  } else if (bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    let offset = 2;
+    const frameMarkers = [0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf];
+    while (offset < bytes.length) {
+      if (bytes[offset++] !== 0xff) break;
+      while (offset < bytes.length && bytes[offset] === 0xff) offset += 1;
+      if (offset >= bytes.length) break;
+      const marker = bytes[offset++];
+      if (marker === 0xda || marker === 0xd9 || marker === 0x00) break;
+      if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+      if (offset + 2 > bytes.length) break;
+      const length = view.getUint16(offset);
+      if (length < 2 || offset + length > bytes.length) break;
+      if (frameMarkers.includes(marker)) {
+        if (length < 8) break;
+        height = view.getUint16(offset + 3);
+        width = view.getUint16(offset + 5);
+        break;
+      }
+      offset += length;
+    }
+  }
+  if (!width || !height) {
+    throw new Error("This file does not contain a readable PNG or JPEG image header.");
+  }
+  // A marketed 24 MP phone photo can contain about 24.5 million pixels.
+  if (width * height > 25_000_000) {
+    throw new Error("This image is too large to decode safely. Choose an image up to 25 megapixels.");
+  }
+  return {width, height};
+}
+
+async function normalizedPNG(file) {
+  await imageDimensions(file);
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file, {imageOrientation: "from-image"});
+  } catch {
+    throw new Error("This file could not be decoded. Choose a valid PNG or JPEG image.");
+  }
+  const canvas = document.createElement("canvas");
+  try {
+    if (!bitmap.width || !bitmap.height) throw new Error("The image has no readable pixels.");
+    const scale = Math.min(1, 1024 / Math.max(bitmap.width, bitmap.height));
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("This browser could not prepare the image.");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    return await new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("This browser could not prepare the image.")), "image/png");
+    });
+  } finally {
+    bitmap.close();
+    canvas.width = 0;
+    canvas.height = 0;
+  }
+}
+
+$("upload-image").addEventListener("click", () => {
+  if (!busy && exampleHasImage()) $("image-file").click();
+});
+$("clear-image").addEventListener("click", () => {
+  if (busy || !exampleHasImage()) return;
+  clearImage();
+  clearResult();
+  syncControls();
+  setStatus("Choose a sample or upload an image.");
+});
+$("image-file").addEventListener("change", async () => {
+  const file = $("image-file").files[0];
+  $("image-file").value = "";
+  if (busy || !exampleHasImage() || !file) return;
+  if (file.size === 0 || file.size > 20 * 1024 * 1024) {
+    setStatus("Choose a PNG or JPEG image up to 20 MiB.", "error");
+    return;
+  }
+  clearResult();
+  const revision = clearImage("Preparing image…");
+  setBusy(true);
+  setStatus("Preparing image…", "running");
+  try {
+    const png = await normalizedPNG(file);
+    if (revision !== imageRevision) return;
+    setStatus("Uploading image…", "running");
+    const selection = await readResponse(await fetch("/api/image", {
+      method: "POST", headers: {"Content-Type": "image/png"}, body: png,
+    }));
+    if (revision !== imageRevision) return;
+    await displayImage(selection, revision);
+    if (revision === imageRevision) setStatus("Ready to run.");
+  } catch (error) {
+    if (revision === imageRevision) {
+      $("image-placeholder").textContent = error.message;
+      setStatus(error.message, "error");
+    }
+  } finally {
+    if (revision === imageRevision) setBusy(false);
+  }
+});
+
 $("model-select").addEventListener("change", async () => {
   if (busy) return;
   const model = $("model-select").value;
-  lastResult = null;
-  renderResult(null);
+  clearResult();
   setBusy(true);
   setStatus(`Loading Gemma 4 ${model.toUpperCase()}…`, "running");
   try {
@@ -275,17 +486,37 @@ async function initialize() {
     const config = await api("/api/config");
     currentModel = config.model;
     examples = config.examples;
+    imageSamples = config.image_samples || [];
     $("model-select").value = currentModel;
     for (const example of examples) {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "example-button";
       button.dataset.example = example.id;
-      button.textContent = example.title;
-      button.addEventListener("click", () => { if (!busy) selectExample(example); });
+      button.dataset.modality = exampleHasImage(example) ? "image" : "text";
+      button.title = exampleHasImage(example) ? "Image example" : "Text-only example";
+      button.setAttribute("aria-label", `${example.title} (${exampleHasImage(example) ? "image" : "text only"})`);
+      const title = document.createElement("span");
+      title.className = "example-title";
+      title.textContent = example.title;
+      const icon = document.createElement("span");
+      icon.className = "example-kind-icon";
+      icon.setAttribute("aria-hidden", "true");
+      button.append(title, icon);
+      button.addEventListener("click", () => { if (!busy) void selectExample(example); });
       $("example-buttons").append(button);
     }
-    selectExample(examples[0]);
+    for (const sample of imageSamples) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "image-sample";
+      button.dataset.image = sample.id;
+      button.textContent = sample.title;
+      button.setAttribute("aria-pressed", "false");
+      button.addEventListener("click", () => { if (!busy) void chooseImage(sample); });
+      $("image-samples").append(button);
+    }
+    await selectExample(examples[0]);
     setBusy(false);
   } catch (error) {
     setStatus(`Could not connect: ${error.message} Refresh to retry.`, "error");

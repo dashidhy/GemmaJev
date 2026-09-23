@@ -44,11 +44,13 @@ def model_config(name: str, workspace: str | Path | None = None) -> dict:
     with manifest.open("rb") as stream:
         config = tomllib.load(stream)["models"][name].copy()
     config["model_path"] = str(root / config["model_path"])
+    config["mmproj_path"] = str(root / config["mmproj_path"])
     return config
 
 
-def runtime_path(workspace: str | Path | None = None) -> Path:
-    return workspace_root(workspace) / ".runtime/build/bin/gemmajev-worker"
+def runtime_path(workspace: str | Path | None = None, *, vision: bool = False) -> Path:
+    name = "gemmajev-vision-worker" if vision else "gemmajev-worker"
+    return workspace_root(workspace) / ".runtime/build/bin" / name
 
 
 def file_sha256(path: str | Path) -> str:
@@ -114,15 +116,26 @@ def download_file(
     return destination
 
 
-def prepare_model(name: str, workspace: str | Path | None = None) -> Path:
+def prepare_model(
+    name: str, workspace: str | Path | None = None, *, vision: bool = False
+) -> Path:
     config = model_config(name, workspace)
     url = f"https://huggingface.co/{config['repo_id']}/resolve/{config['revision']}/{config['model_file']}"
-    return download_file(
+    model = download_file(
         url, config["model_path"], size=config["model_size"], sha256=config["model_sha256"]
     )
+    if vision:
+        url = (
+            f"https://huggingface.co/{config['repo_id']}/resolve/"
+            f"{config['revision']}/{config['mmproj_file']}"
+        )
+        download_file(
+            url, config["mmproj_path"], size=config["mmproj_size"], sha256=config["mmproj_sha256"]
+        )
+    return model
 
 
-def build_runtime(workspace: str | Path | None = None) -> Path:
+def build_runtime(workspace: str | Path | None = None, *, vision: bool = False) -> Path:
     check_platform()
     root = workspace_root(workspace)
     script = Path(__file__).resolve().parents[2] / "scripts/build_runtime.sh"
@@ -136,7 +149,7 @@ def build_runtime(workspace: str | Path | None = None) -> Path:
     subprocess.run(
         ["bash", str(script)],
         cwd=script.parent.parent,
-        env={**os.environ, "GEMMAJEV_WORKSPACE": str(root)},
+        env={**os.environ, "GEMMAJEV_WORKSPACE": str(root), "GEMMAJEV_VISION": "1" if vision else "0"},
         check=True,
     )
-    return runtime_path(root)
+    return runtime_path(root, vision=True) if vision else runtime_path(root)

@@ -12,12 +12,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from urllib.parse import urlsplit
 
+from .assets import workspace_root
+from .demo_images import IMAGE_SAMPLES, MAX_IMAGE_BYTES, MAX_UPLOAD_BYTES, ImageStore
 from .request import validate_request
 
 EXAMPLES = {
     "customer_support": "Customer support",
     "evidence_check": "Evidence check",
     "answer_usefulness": "Answer usefulness",
+    "image_style": "Image style",
 }
 
 
@@ -31,7 +34,7 @@ def load_example(name: str) -> dict:
 def _engine_factory(**kwargs):
     from .engine import GemmaJev
 
-    return GemmaJev(context_size=2048, **kwargs)
+    return GemmaJev(context_size=2048, vision=True, **kwargs)
 
 
 class Playground:
@@ -76,13 +79,16 @@ class Playground:
         with self._lock:
             self._load(model)
 
-    def run(self, model: str, request: dict) -> dict:
+    def run(self, model: str, request: dict, *, image_path=None) -> dict:
         request = validate_request(request)
         with self._lock:
             load_ms = self._load(model)
             try:
                 start = time.perf_counter()
-                probabilities = self._engine.decide(request)
+                probabilities = (
+                    self._engine.decide(request, image_path=image_path)
+                    if image_path is not None else self._engine.decide(request)
+                )
                 request_ms = (time.perf_counter() - start) * 1000
                 if (
                     set(probabilities) != set(request["options"])
@@ -140,6 +146,7 @@ class PlaygroundServer(ThreadingHTTPServer):
         self.model = model
         self.manager = manager if manager is not None else Playground(workspace)
         self.operation = threading.Lock()
+        self.images = ImageStore(workspace_root(workspace), samples=IMAGE_SAMPLES, max_bytes=MAX_UPLOAD_BYTES)
         super().__init__(("127.0.0.1", port), PlaygroundHandler, bind_and_activate=False)
         try:
             self.server_bind()
@@ -151,6 +158,12 @@ class PlaygroundServer(ThreadingHTTPServer):
         connection, address = super().get_request()
         connection.settimeout(10)
         return connection, address
+
+    def server_close(self):
+        try:
+            super().server_close()
+        finally:
+            self.images.close()
 
 
 class PlaygroundHandler(BaseHTTPRequestHandler):
@@ -196,13 +209,26 @@ class PlaygroundHandler(BaseHTTPRequestHandler):
         if origin is not None and origin != f"http://{host}":
             self._error(403, "Cross-origin requests are not allowed.")
             return False
+        if self.headers.get("Sec-Fetch-Site") == "cross-site":
+            self._error(403, "Cross-site requests are not allowed.")
+            return False
         return True
 
     def do_GET(self):
         if not self._local_request():
             return
         path = urlsplit(self.path).path
-        if path in STATIC_FILES:
+        if path.startswith("/api/images/"):
+            try:
+                content = self.server.images.resolve(path.removeprefix("/api/images/")).read_bytes()
+            except ValueError as error:
+                self._error(404, str(error))
+                return
+            except OSError:
+                self._error(503, "Sample image is unavailable. Reinstall GemmaJev.")
+                return
+            self._send(200, content, "image/png")
+        elif path in STATIC_FILES:
             name, content_type = STATIC_FILES[path]
             try:
                 content = files("gemmajev").joinpath("playground", name).read_bytes()
@@ -214,8 +240,13 @@ class PlaygroundHandler(BaseHTTPRequestHandler):
             self._send(200, {
                 "model": self.server.model,
                 "examples": [
-                    {"id": name, "title": title, "request": load_example(name)}
+                    {"id": name, "title": title, "request": load_example(name),
+                     **({"image_id": "sample_1"} if name == "image_style" else {})}
                     for name, title in EXAMPLES.items()
+                ],
+                "image_samples": [
+                    {"id": name, "title": value[0], "url": f"/api/images/{name}"}
+                    for name, value in IMAGE_SAMPLES.items()
                 ],
             })
         else:
@@ -224,10 +255,42 @@ class PlaygroundHandler(BaseHTTPRequestHandler):
     def do_HEAD(self):
         self.do_GET()
 
+    def _upload_image(self):
+        if self.headers.get_content_type() != "image/png":
+            self._error(415, "Upload PNG image bytes using the image picker.")
+            return
+        if "Transfer-Encoding" in self.headers:
+            self._error(400, "Chunked request bodies are not supported.")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            self._error(411, "A valid Content-Length is required.")
+            return
+        if not 0 < length <= MAX_IMAGE_BYTES:
+            self._error(413, "Image exceeds the 20 MiB upload limit.")
+            return
+        try:
+            data = self.rfile.read(length)
+            if len(data) != length:
+                raise ValueError("Incomplete image upload.")
+            self._send(200, self.server.images.add(data))
+        except ValueError as error:
+            self._error(400, str(error))
+        except OverflowError as error:
+            self._error(413, str(error))
+        except (TimeoutError, ConnectionError):
+            self._error(408, "Image upload timed out or was interrupted.")
+        except OSError:
+            self._error(503, "Could not save the uploaded image.")
+
     def do_POST(self):
         if not self._local_request():
             return
         path = urlsplit(self.path).path
+        if path == "/api/image":
+            self._upload_image()
+            return
         if path not in {"/api/decide", "/api/model"}:
             self._error(404, "Not found.")
             return
@@ -256,11 +319,16 @@ class PlaygroundHandler(BaseHTTPRequestHandler):
             if not isinstance(model, str) or model not in {"e4b", "12b"}:
                 raise ValueError("Choose E4B or 12B.")
             request = validate_request(body.get("request")) if path == "/api/decide" else None
+            image_id = body.get("image_id") if path == "/api/decide" else None
+            image_path = self.server.images.resolve(image_id) if image_id is not None else None
         except (ValueError, UnicodeError) as error:
             self._error(400, str(error))
             return
         except (TimeoutError, ConnectionError):
             self._error(408, "Request body timed out or was interrupted.")
+            return
+        except OSError:
+            self._error(503, "The selected image is unavailable. Choose or upload it again.")
             return
         if not self.server.operation.acquire(blocking=False):
             self._error(409, "The engine is busy. Wait for the current operation to finish.")
@@ -271,7 +339,11 @@ class PlaygroundHandler(BaseHTTPRequestHandler):
                 self.server.model = model
                 self._send(200, {"model": model})
             else:
-                result = self.server.manager.run(model, request)
+                result = (
+                    self.server.manager.run(model, request, image_path=image_path)
+                    if image_path is not None else self.server.manager.run(model, request)
+                )
+                result["image_id"] = image_id
                 self.server.model = model
                 self._send(200, result)
         except (ValueError, RuntimeError, OSError, TimeoutError) as error:

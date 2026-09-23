@@ -46,7 +46,9 @@ def test_model_manifest_is_independent_of_asset_workspace(tmp_path):
     for name in ("e4b", "12b"):
         config = assets.model_config(name, tmp_path)
         assert Path(config["model_path"]).is_relative_to(tmp_path / ".models")
+        assert Path(config["mmproj_path"]).is_relative_to(tmp_path / ".models")
         assert len(config["model_sha256"]) == 64
+        assert len(config["mmproj_sha256"]) == 64
     with pytest.raises(ValueError, match="model must"):
         assets.model_config("unsupported", tmp_path)
 
@@ -98,7 +100,93 @@ def test_setup_hint_preserves_selected_model_and_workspace(tmp_path, monkeypatch
     monkeypatch.setattr(cli, "build_runtime", lambda root: root / ".runtime/worker")
     monkeypatch.setattr(cli, "prepare_model", lambda model, root: root / ".models" / model)
     assert cli.main(["setup", "--model", "e4b", "--workspace", str(workspace)]) == 0
-    hint = capsys.readouterr().out.split("Ready. Run: ")[1].strip()
+    output = capsys.readouterr().out
+    hint = output.split("To open Playground: ")[1].strip()
     assert shlex.split(hint) == [
-        "uv", "run", "gemmajev", "demo", "--model", "e4b", "--workspace", str(workspace)
+        "uv", "run", "gemmajev", "setup", "--model", "e4b", "--vision",
+        "--workspace", str(workspace),
     ]
+    assert "gemmajev demo" not in output
+
+
+def test_vision_runtime_uses_separate_path_and_explicit_build_mode(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(assets, "check_platform", dict)
+    monkeypatch.setattr(assets.subprocess, "run", lambda *args, **kwargs: calls.append(kwargs))
+    monkeypatch.setenv("GEMMAJEV_VISION", "1")
+    assert assets.build_runtime(tmp_path) == assets.runtime_path(tmp_path)
+    assert calls[-1]["env"]["GEMMAJEV_VISION"] == "0"
+    assert assets.build_runtime(tmp_path, vision=True) == (
+        tmp_path / ".runtime/build/bin/gemmajev-vision-worker"
+    )
+    assert calls[-1]["env"]["GEMMAJEV_VISION"] == "1"
+
+
+def test_vision_setup_downloads_matching_projector_only_when_requested(tmp_path, monkeypatch):
+    calls = []
+
+    def download(url, path, **kwargs):
+        calls.append((url, path, kwargs))
+        return Path(path)
+
+    monkeypatch.setattr(assets, "download_file", download)
+    config = assets.model_config("e4b", tmp_path)
+    assert assets.prepare_model("e4b", tmp_path) == Path(config["model_path"])
+    assert len(calls) == 1
+    assert assets.prepare_model("e4b", tmp_path, vision=True) == Path(config["model_path"])
+    assert len(calls) == 3
+    url, path, options = calls[-1]
+    assert config["revision"] in url and url.endswith(config["mmproj_file"])
+    assert path == config["mmproj_path"]
+    assert options == {"size": config["mmproj_size"], "sha256": config["mmproj_sha256"]}
+
+
+def test_cli_vision_setup_prepares_both_workers_and_suggests_playground(tmp_path, monkeypatch, capsys):
+    import shlex
+
+    calls = []
+    monkeypatch.setattr(cli, "check_platform", lambda: {"chip": "test", "memory_bytes": 16 * 2**30})
+    monkeypatch.setattr(cli, "build_runtime", lambda root, **kwargs: calls.append(("build", kwargs)))
+    monkeypatch.setattr(
+        cli, "prepare_model", lambda model, root, **kwargs: calls.append((model, kwargs))
+    )
+    assert cli.main(["setup", "--vision", "--model", "e4b", "--workspace", str(tmp_path)]) == 0
+    assert calls == [("build", {}), ("build", {"vision": True}), ("e4b", {"vision": True})]
+    output = capsys.readouterr().out
+    assert shlex.split(output.split("Ready. Run: ")[1].strip()) == [
+        "uv", "run", "gemmajev", "demo", "--model", "e4b", "--workspace", str(tmp_path),
+    ]
+
+
+def test_cli_image_decision_preserves_request_and_enables_vision(tmp_path, monkeypatch, capsys):
+    from gemmajev import engine
+
+    request = {
+        "task": "Identify the image.", "state": "An image is attached.",
+        "query": "Which object?", "options": {"cat": "A cat", "dog": "A dog"},
+    }
+    source = tmp_path / "request.json"
+    source.write_text(json.dumps(request))
+    image = tmp_path / "example.png"
+    calls = []
+
+    class FakeModel:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+        def close(self):
+            calls.append("closed")
+
+        def decide(self, value, **kwargs):
+            calls.append((value, kwargs))
+            return {"cat": 0.8, "dog": 0.2}
+
+    monkeypatch.setattr(engine, "GemmaJev", FakeModel)
+    assert cli.main([
+        "decide", str(source), "--model", "e4b", "--image", str(image), "--image-tokens", "140"
+    ]) == 0
+    assert calls == [
+        {"model": "e4b", "workspace": None, "vision": True, "image_tokens": 140},
+        (request, {"image_path": image}), "closed",
+    ]
+    assert json.loads(capsys.readouterr().out) == {"cat": 0.8, "dog": 0.2}

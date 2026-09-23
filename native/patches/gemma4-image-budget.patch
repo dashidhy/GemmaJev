@@ -1,0 +1,66 @@
+--- a/tools/mtmd/mtmd.cpp
++++ b/tools/mtmd/mtmd.cpp
+@@ -609,7 +609,7 @@
+                     // <|image> ... (image embeddings) ... <image|>
+                     img_beg = "<|image>";
+                     img_end = "<image|>";
+-                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
++                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v, true);
+                 } break;
+             case PROJECTOR_TYPE_DEEPSEEKOCR:
+                 {
+--- a/tools/mtmd/mtmd-image.h
++++ b/tools/mtmd/mtmd-image.h
+@@ -98,7 +98,10 @@
+ // if image_resize_pad is true, the resized image will be padded, otherwise it will be either stretched or center-cropped depending on image_resize_pad
+ // this is used by models with native support for dynamic image size, for example: Qwen-VL, Pixtral, Kimi-VL, etc
+ struct mtmd_image_preprocessor_dyn_size : mtmd_image_preprocessor {
+-    mtmd_image_preprocessor_dyn_size(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
++    // GemmaJev: Gemma 4 uses the full max-token budget, including upscaling.
++    bool use_max_budget;
++    mtmd_image_preprocessor_dyn_size(const clip_ctx * ctx, bool use_max_budget = false)
++        : mtmd_image_preprocessor(ctx), use_max_budget(use_max_budget) {}
+     bool preprocess(const clip_image_u8 & img, clip_image_f32_batch & output) override;
+ };
+ 
+--- a/tools/mtmd/mtmd-image.cpp
++++ b/tools/mtmd/mtmd-image.cpp
+@@ -894,14 +894,36 @@
+     const clip_image_size original_size = img.get_size();
+     // the original pixtral model doesn't have n_merge
+     const int cur_merge = hparams.n_merge == 0 ? 1 : hparams.n_merge;
+-    const clip_image_size target_size = img_tool::calc_size_preserved_ratio(
++    clip_image_size target_size = img_tool::calc_size_preserved_ratio(
+         original_size,
+         hparams.patch_size * cur_merge,
+         hparams.image_min_pixels,
+         hparams.image_max_pixels);
++    if (use_max_budget) {
++        // GemmaJev: match HF Gemma4 get_aspect_ratio_preserving_size geometry.
++        // Budget is always filled as far as 48-pixel alignment permits, even
++        // for a small input. Keep upstream interpolation, documented separately.
++        const int align = hparams.patch_size * cur_merge;
++        const double scale = std::sqrt(static_cast<double>(hparams.image_max_pixels)
++                / (static_cast<double>(original_size.width) * original_size.height));
++        int height = static_cast<int>(std::floor(original_size.height * scale / align)) * align;
++        int width  = static_cast<int>(std::floor(original_size.width  * scale / align)) * align;
++        const int max_side = hparams.image_max_pixels / align;
++        if (height == 0) {
++            height = align;
++            width = std::min(static_cast<int>(std::floor(static_cast<double>(original_size.width)
++                    / original_size.height)) * align, max_side);
++        } else if (width == 0) {
++            width = align;
++            height = std::min(static_cast<int>(std::floor(static_cast<double>(original_size.height)
++                    / original_size.width)) * align, max_side);
++        }
++        GGML_ASSERT(width > 0 && height > 0 && width * height <= hparams.image_max_pixels);
++        target_size = {width, height};
++    }
+     img_tool::resize(img, resized_image, target_size,
+                         hparams.image_resize_algo,
+-                        hparams.image_resize_pad,
++                        use_max_budget ? PAD_NONE : hparams.image_resize_pad,
+                         hparams.image_pad_color);
+     clip_image_f32_ptr img_f32(clip_image_f32_init());
+     img_u8_to_f32(resized_image, *img_f32, hparams.image_mean, hparams.image_std);

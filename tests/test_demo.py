@@ -1,12 +1,16 @@
 """Playground lifecycle and local HTTP behavior, without weights or GPU calls."""
 
+import hashlib
 import http.client
 import json
 import socket
+import struct
 import threading
 import webbrowser
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar
 
@@ -30,6 +34,7 @@ class FakeEngine:
         self.closed = False
         self.calls = 0
         self.load_calls = 0
+        self.decisions = []
         self.instances.append(self)
 
     def load(self):
@@ -38,9 +43,10 @@ class FakeEngine:
         assert not self.closed
         self.loaded = True
 
-    def decide(self, request):
+    def decide(self, request, *, image_path=None):
         assert self.loaded and not self.closed
         self.calls += 1
+        self.decisions.append((request, image_path))
         ids = list(request["options"])
         return {key: (0.8 if index == 0 else 0.2 / (len(ids) - 1)) for index, key in enumerate(ids)}
 
@@ -50,26 +56,38 @@ class FakeEngine:
 
 
 @pytest.fixture
-def manager():
+def manager(tmp_path):
     FakeEngine.instances = []
-    value = Playground(engine_factory=FakeEngine)
+    value = Playground(workspace=tmp_path, engine_factory=FakeEngine)
     yield value
     value.close()
 
 
 @pytest.fixture
-def server(manager):
-    value = create_server(port=0, manager=manager)
-    value.server_activate()
-    thread = threading.Thread(target=value.serve_forever, kwargs={"poll_interval": 0.02})
-    thread.start()
+def server_factory(manager):
+    running = []
+
+    def start():
+        value = create_server(port=0, manager=manager, workspace=manager.workspace)
+        value.server_activate()
+        thread = threading.Thread(target=value.serve_forever, kwargs={"poll_interval": 0.02})
+        thread.start()
+        running.append((value, thread))
+        return value
+
     try:
-        yield value
+        yield start
     finally:
-        value.shutdown()
-        value.server_close()
-        thread.join(timeout=3)
-        assert not thread.is_alive()
+        for value, thread in reversed(running):
+            value.shutdown()
+            value.server_close()
+            thread.join(timeout=3)
+            assert not thread.is_alive()
+
+
+@pytest.fixture
+def server(server_factory):
+    return server_factory()
 
 
 def exchange(server, method="GET", path="/api/config", *, payload=None, body=None, headers=None):
@@ -95,16 +113,43 @@ def decision_payload(model="12b"):
     return {"model": model, "request": load_example("customer_support")}
 
 
+def png_image(width=2, height=2, *, color_type=6, fill=96, scanlines=None):
+    """A complete PNG with valid compressed pixels and chunk CRCs; no image library."""
+    channels = {0: 1, 2: 3, 4: 2, 6: 4}[color_type]
+
+    def chunk(name, data):
+        return struct.pack(">I", len(data)) + name + data + struct.pack(">I", zlib.crc32(name + data))
+
+    if scanlines is None:
+        scanlines = (b"\0" + bytes([fill]) * width * channels) * height
+    return b"\x89PNG\r\n\x1a\n" + b"".join([
+        chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, color_type, 0, 0, 0)),
+        chunk(b"IDAT", zlib.compress(scanlines)),
+        chunk(b"IEND", b""),
+    ])
+
+
+def upload(server, image, *, headers=None):
+    return exchange(
+        server, "POST", "/api/image", body=image,
+        headers={"Content-Type": "image/png", **(headers or {})},
+    )
+
+
 def test_packaged_examples_have_semantic_ids_and_self_consistent_terms():
     for name in EXAMPLES:
         request = load_example(name)
         assert set(request) == {"task", "state", "query", "options"}
-        assert len(request["options"]) == 3
+        assert len(request["options"]) == (4 if name == "image_style" else 3)
         assert all(len(option_id) > 1 for option_id in request["options"])
     evidence = load_example("evidence_check")
     assert evidence["state"].startswith("Evidence:")
     assert evidence["query"].startswith("Claim:")
     assert "evidence" in evidence["task"] and "claim" in evidence["task"]
+    image = load_example("image_style")
+    assert "image" in image["task"].lower()
+    assert "image" in image["state"].lower()
+    assert "style" in image["query"].lower()
 
 
 def test_demo_uses_smaller_context_without_changing_injected_factory(monkeypatch):
@@ -115,6 +160,7 @@ def test_demo_uses_smaller_context_without_changing_injected_factory(monkeypatch
         "model": "12b",
         "workspace": None,
         "context_size": 2048,
+        "vision": True,
     }
 
 
@@ -287,9 +333,14 @@ def test_config_exposes_examples_without_inference(server):
     status, _, config = exchange(server)
     assert status == 200 and config["model"] == "12b"
     assert config["examples"] == [
-        {"id": name, "title": title, "request": load_example(name)}
+        {"id": name, "title": title, "request": load_example(name),
+         **({"image_id": "sample_1"} if name == "image_style" else {})}
         for name, title in EXAMPLES.items()
     ]
+    assert len(config["image_samples"]) == 4
+    for index, sample in enumerate(config["image_samples"], start=1):
+        assert sample["id"] == f"sample_{index}" and sample["title"]
+        assert sample["url"] == f"/api/images/sample_{index}"
     assert FakeEngine.instances == []
 
 
@@ -317,6 +368,7 @@ def test_decision_uses_preloaded_model_preserves_option_order_and_switches(serve
     assert status == 200 and result["request"] == payload["request"]
     assert list(result["probabilities"]) == list(payload["request"]["options"])
     assert result["model"] == "12b" and result["load_ms"] == 0 and result["request_ms"] >= 0
+    assert result["image_id"] is None
     assert sum(result["probabilities"].values()) == pytest.approx(1)
     first = FakeEngine.instances[0]
     assert first.load_calls == 1 and first.calls == 1
@@ -543,3 +595,209 @@ def test_switch_responds_only_after_load_and_rejects_other_model_operations(
     status, _, result = exchange(server, "POST", "/api/decide", payload=decision_payload("e4b"))
     assert status == 200 and result["load_ms"] == 0
     assert selected.calls == 1 and selected.load_calls == 1
+
+
+def test_image_decision_reuses_loaded_engine_and_keeps_attachment_out_of_request(manager, tmp_path):
+    request = load_example("image_style")
+    attachment = tmp_path / "private-cat-photo.png"
+    attachment.write_bytes(png_image())
+    manager.load("12b")
+    result = manager.run("12b", request, image_path=attachment)
+    engine = FakeEngine.instances[0]
+    assert engine.load_calls == 1 and engine.calls == 1
+    assert engine.decisions == [(request, attachment)]
+    assert result["request"] == request and result["load_ms"] == 0
+    assert str(attachment) not in json.dumps(result)
+    assert set(result) == {"request", "model", "probabilities", "request_ms", "load_ms"}
+    manager.run("12b", request)
+    assert engine.decisions[-1] == (request, None)
+
+
+def test_packaged_images_are_served_without_running_inference(server):
+    config = exchange(server)[2]
+    for sample in config["image_samples"]:
+        status, headers, body = exchange(server, path=sample["url"])
+        assert status == 200 and headers["Content-Type"] == "image/png"
+        assert body.startswith(b"\x89PNG\r\n\x1a\n")
+    assert FakeEngine.instances == []
+
+
+def test_sample_decision_uses_registered_path_without_leaking_image_identity(server):
+    request = load_example("image_style")
+    status, _, result = exchange(
+        server, "POST", "/api/decide",
+        payload={"model": "12b", "request": request, "image_id": "sample_1"},
+    )
+    assert status == 200 and result["image_id"] == "sample_1"
+    passed_request, passed_image = FakeEngine.instances[0].decisions[-1]
+    assert passed_request == request and result["request"] == request
+    assert isinstance(passed_image, Path) and passed_image.is_file()
+    assert "sample_1" not in json.dumps(passed_request)
+
+
+@pytest.mark.parametrize("color_type", [0, 2, 4, 6])
+def test_upload_roundtrip_is_deduplicated_and_does_not_run_model(server, color_type):
+    image = png_image(color_type=color_type)
+    digest = hashlib.sha256(image).hexdigest()
+    status, _, uploaded = upload(server, image)
+    assert status == 200
+    assert uploaded == {
+        "image_id": digest, "url": f"/api/images/{digest}", "width": 2, "height": 2,
+    }
+    assert upload(server, image)[2] == uploaded
+    assert FakeEngine.instances == []
+    status, headers, data = exchange(server, path=uploaded["url"])
+    assert status == 200 and headers["Content-Type"] == "image/png" and data == image
+
+
+def test_uploaded_image_can_be_scored_without_filename_or_path_in_prompt(server, manager):
+    image = png_image()
+    status, _, uploaded = upload(
+        server, image,
+        headers={"Content-Disposition": 'attachment; filename="secret-answer-is-cat.png"'},
+    )
+    assert status == 200 and FakeEngine.instances == []
+    request = load_example("image_style")
+    status, _, result = exchange(
+        server, "POST", "/api/decide",
+        payload={"model": "12b", "request": request, "image_id": uploaded["image_id"]},
+    )
+    assert status == 200 and result["image_id"] == uploaded["image_id"]
+    passed_request, passed_image = FakeEngine.instances[0].decisions[-1]
+    assert passed_request == request
+    assert isinstance(passed_image, Path) and passed_image.read_bytes() == image
+    assert passed_image.is_relative_to(manager.workspace / ".runtime")
+    assert "secret-answer-is-cat" not in str(passed_image)
+    assert str(passed_image) not in json.dumps(result)
+    assert uploaded["image_id"] not in json.dumps(passed_request)
+
+
+@pytest.mark.parametrize("image_id", [
+    "not-registered", "a" * 64, "../README.md", "/etc/passwd", "sample_1/../../README.md",
+    "%2e%2e%2fREADME.md", "https://example.test/image.png", 1, [], {},
+])
+def test_unknown_or_pathlike_image_ids_cannot_reach_model(server, image_id):
+    status, _, content = exchange(
+        server, "POST", "/api/decide",
+        payload={**decision_payload(), "image_id": image_id},
+    )
+    assert status == 400 and content["error"]
+    assert FakeEngine.instances == []
+
+
+@pytest.mark.parametrize("path", [
+    "/api/images/unknown", "/api/images/../README.md", "/api/images/%2e%2e%2fREADME.md",
+    "/api/images/sample_1/anything", "/api/images/" + "a" * 64,
+])
+def test_unknown_image_routes_return_not_found(server, path):
+    status, _, content = exchange(server, path=path)
+    assert status == 404 and content["error"]
+    assert FakeEngine.instances == []
+
+
+@pytest.mark.parametrize("image", [
+    b"not a PNG", b"\x89PNG\r\n\x1a\n", png_image()[:-12],
+    png_image()[:32] + bytes([png_image()[32] ^ 1]) + png_image()[33:],
+    png_image(scanlines=b"\0"), png_image(scanlines=b"\0" * 1000),
+    png_image(width=0), png_image(width=1025), png_image(height=1025),
+])
+def test_malformed_and_oversized_dimensions_are_rejected_before_inference(server, image):
+    status, _, content = upload(server, image)
+    assert status in {400, 413} and content["error"]
+    assert FakeEngine.instances == []
+
+
+def test_upload_rejects_wrong_mime_and_oversized_body_without_loading(server, monkeypatch):
+    from gemmajev import demo
+
+    for mime in ["image/jpeg", "application/octet-stream", "application/json"]:
+        status, _, content = upload(server, png_image(), headers={"Content-Type": mime})
+        assert status == 415 and content["error"]
+    monkeypatch.setattr(demo, "MAX_IMAGE_BYTES", 128)
+    status, _, content = upload(server, b"x" * 129)
+    assert status == 413 and content["error"]
+    assert FakeEngine.instances == []
+
+
+def test_upload_quota_counts_unique_images_and_preserves_existing_uploads(
+    server_factory, monkeypatch,
+):
+    from gemmajev import demo
+
+    first, second = png_image(fill=90), png_image(fill=91)
+    monkeypatch.setattr(demo, "MAX_UPLOAD_BYTES", len(first) + len(second) - 1)
+    server = server_factory()
+    status, _, uploaded = upload(server, first)
+    assert status == 200
+    assert upload(server, first)[0] == 200  # Deduplication does not consume quota twice.
+    status, _, content = upload(server, second)
+    assert status == 413 and content["error"]
+    assert exchange(server, path=uploaded["url"])[2] == first
+    assert FakeEngine.instances == []
+
+
+def test_images_preserve_local_host_and_origin_restrictions(server):
+    for headers in [{"Host": "attacker.invalid"}, {"Origin": "https://attacker.invalid"}]:
+        status, _, content = upload(server, png_image(), headers=headers)
+        assert status == 403 and content["error"]
+        assert exchange(server, path="/api/images/sample_1", headers=headers)[0] == 403
+    assert FakeEngine.instances == []
+
+
+@pytest.mark.parametrize("upload_first", [False, True])
+def test_sample_and_upload_alias_never_rewrite_an_existing_image(tmp_path, monkeypatch, upload_first):
+    from gemmajev import demo_images
+
+    data = png_image()
+    digest = hashlib.sha256(data).hexdigest()
+    package = tmp_path / "package"
+    sample = package / "examples/images/sample.png"
+    sample.parent.mkdir(parents=True)
+    sample.write_bytes(data)
+    monkeypatch.setattr(demo_images, "files", lambda _: package)
+    store = demo_images.ImageStore(tmp_path, samples={"sample_1": ("Photo", "sample.png")})
+    try:
+        if upload_first:
+            store.add(data)
+            original_path = store.resolve(digest)
+        else:
+            original_path = store.resolve("sample_1")
+        write_bytes = Path.write_bytes
+
+        def guarded_write(path, content):
+            # A live model/preview can be reading this file while another alias
+            # is registered. Any rewrite would briefly truncate that input.
+            assert path != original_path, "Registered image bytes must remain immutable"
+            return write_bytes(path, content)
+
+        monkeypatch.setattr(Path, "write_bytes", guarded_write)
+        if upload_first:
+            assert store.resolve("sample_1") == original_path
+        else:
+            assert store.add(data)["image_id"] == digest
+        assert store.resolve(digest) == store.resolve("sample_1") == original_path
+        assert original_path.read_bytes() == data
+    finally:
+        store.close()
+
+
+def test_uploaded_image_files_are_removed_when_server_closes(manager, tmp_path):
+    value = create_server(port=0, manager=manager, workspace=tmp_path)
+    value.server_activate()
+    thread = threading.Thread(target=value.serve_forever, kwargs={"poll_interval": 0.02})
+    thread.start()
+    try:
+        status, _, uploaded = upload(value, png_image())
+        assert status == 200
+        status, _, _ = exchange(
+            value, "POST", "/api/decide",
+            payload={**decision_payload(), "image_id": uploaded["image_id"]},
+        )
+        assert status == 200
+        path = FakeEngine.instances[0].decisions[-1][1]
+        assert path.is_file()
+    finally:
+        value.shutdown()
+        value.server_close()
+        thread.join(timeout=3)
+    assert not thread.is_alive() and not path.exists()

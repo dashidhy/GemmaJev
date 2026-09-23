@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Download and build the text scorer; all generated files stay in .runtime/.
+# Download and build a scorer; all generated files stay in .runtime/.
 set -euo pipefail
 if [[ "$(uname -s)" != Darwin || "$(uname -m)" != arm64 ]]; then
     printf 'GemmaJev currently supports macOS on Apple Silicon.\n' >&2
@@ -9,8 +9,14 @@ project_root="$(cd "$(dirname "$0")/.." && pwd)"
 workspace="${GEMMAJEV_WORKSPACE:-$project_root}"
 revision="8086439a4cea94c71a5dfb8fe4ad1546aebd640f"
 runtime_dir="$workspace/.runtime"
-source_dir="$runtime_dir/llama.cpp-text-$revision"
-build_dir="$runtime_dir/text-build"
+vision="${GEMMAJEV_VISION:-0}"
+case "$vision" in
+    0) flavor="text"; binary="gemmajev-worker" ;;
+    1) flavor="vision"; binary="gemmajev-vision-worker" ;;
+    *) printf 'GEMMAJEV_VISION must be 0 or 1.\n' >&2; exit 1 ;;
+esac
+source_dir="$runtime_dir/llama.cpp-$flavor-$revision"
+build_dir="$runtime_dir/$flavor-build"
 jobs="${GEMMAJEV_BUILD_JOBS:-2}"
 if [[ ! "$jobs" =~ ^[1-9][0-9]*$ ]]; then
     printf 'GEMMAJEV_BUILD_JOBS must be a positive integer.\n' >&2
@@ -57,15 +63,22 @@ if ! (cd "$source_dir" && patch -p1 -f -R --dry-run -i "$patch_file" >/dev/null 
     (cd "$source_dir" && patch -p1 -f -i "$patch_file")
 fi
 printf '%s\n' "$patch_hash" > "$patch_stamp"
+if [[ "$vision" == 1 ]]; then
+    image_patch="$project_root/native/patches/gemma4-image-budget.patch"
+    if ! (cd "$source_dir" && patch -p1 -f -R --dry-run -i "$image_patch" >/dev/null 2>&1); then
+        (cd "$source_dir" && patch -p1 -f --dry-run -i "$image_patch")
+        (cd "$source_dir" && patch -p1 -f -i "$image_patch")
+    fi
+fi
 cmake -S "$project_root/native" -B "$build_dir" \
-    -DCMAKE_BUILD_TYPE=Release -DGEMMAJEV_LLAMA_SOURCE="$source_dir"
+    -DCMAKE_BUILD_TYPE=Release -DGEMMAJEV_LLAMA_SOURCE="$source_dir" -DGEMMAJEV_VISION="$vision"
 cmake --build "$build_dir" --target gemmajev-worker --parallel "$jobs"
 # Atomic publication does not overwrite a running worker's executable inode.
 mkdir -p "$runtime_dir/build/bin"
-install_tmp="$(mktemp "$runtime_dir/build/bin/.gemmajev-worker.XXXXXX")"
+install_tmp="$(mktemp "$runtime_dir/build/bin/.$binary.XXXXXX")"
 trap 'rm -f "$install_tmp"' EXIT
-cp "$build_dir/staging/gemmajev-worker" "$install_tmp"
+cp "$build_dir/staging/$binary" "$install_tmp"
 chmod 755 "$install_tmp"
-mv -f "$install_tmp" "$runtime_dir/build/bin/gemmajev-worker"
+mv -f "$install_tmp" "$runtime_dir/build/bin/$binary"
 trap - EXIT
-printf '\nRuntime built: %s\n' "$runtime_dir/build/bin/gemmajev-worker"
+printf '\nRuntime built: %s\n' "$runtime_dir/build/bin/$binary"
