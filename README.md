@@ -2,7 +2,7 @@
 
 A simplified functionality reproduction of [Jev-style decisions](https://docs.typesafe.ai/introduction) with Gemma 4. Finetuning free, runs locally on your machine.
 
-> **Disclaimer** - GemmaJev is NOT a full reproduction of TypeSafe's original Jev; see [Limitations](./README.md#limitations). This project is developed through ~100% vibe coding (powered by Codex w/ GPT-6 Astra). While tested, the code and documentation may contain critical bugs, hallucinations, or inaccuracies. Use at your own risk and verify critical results independently. If you encounter any problem, feel free to open an [issue](../../issues).
+> **Disclaimer** - GemmaJev is NOT a full reproduction of TypeSafe's original Jev; see [Limitations](#limitations). This project is developed through ~100% vibe coding (powered by Codex w/ GPT-6 Astra). While tested, the code and documentation may contain critical bugs, hallucinations, or inaccuracies. Use at your own risk and verify critical results independently. If you encounter any problem, feel free to open an [issue](../../issues).
 
 > **Contributing** - Any interesting contribution is welcome. Feel free to [PR](../../pulls).
 
