@@ -1,0 +1,10 @@
+{
+  "task": "Read the evidence and judge the claim using only the evidence provided. Distinguish a contradiction from missing information.",
+  "state": "Evidence: The museum opens at 10 a.m. on Sundays. Visitors must book a ticket in advance. Admission is free for children under 12.",
+  "query": "Claim: Visitors need to book a ticket before visiting the museum.",
+  "options": {
+    "supported": "The evidence supports the claim.",
+    "contradicted": "The evidence contradicts the claim.",
+    "unknown": "The evidence does not establish whether the claim is true or false."
+  }
+}

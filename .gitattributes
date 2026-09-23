@@ -1,0 +1,2 @@
+# Unified diff context lines intentionally include a space on otherwise empty lines.
+native/patches/*.patch -whitespace

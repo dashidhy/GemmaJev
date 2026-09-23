@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>GemmaJev Playground</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/style.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <main id="playground-shell">
+      <header id="app-header">
+        <h1>GemmaJev Playground</h1>
+        <select id="model-select" aria-label="Model" disabled>
+          <option value="e4b">Gemma 4 E4B</option>
+          <option value="12b">Gemma 4 12B</option>
+        </select>
+      </header>
+
+      <nav id="example-toolbar" aria-label="Examples">
+        <span id="examples-label">Examples</span>
+        <div id="example-buttons"></div>
+      </nav>
+
+      <div id="workbench">
+        <form id="input-panel" aria-labelledby="input-title">
+          <h2 id="input-title">Input</h2>
+          <div id="text-fields">
+            <div class="editor-field" id="task-field">
+              <label for="task">Task</label>
+              <textarea id="task" name="task" spellcheck="false" disabled></textarea>
+            </div>
+            <div class="editor-field" id="state-field">
+              <label for="state">State</label>
+              <textarea id="state" name="state" spellcheck="false" disabled></textarea>
+            </div>
+            <div class="editor-field" id="query-field">
+              <label for="query">Query</label>
+              <textarea id="query" name="query" spellcheck="false" disabled></textarea>
+            </div>
+          </div>
+
+          <section id="options-field" aria-labelledby="options-title">
+            <div class="options-heading">
+              <h3 id="options-title">Options</h3>
+              <button type="button" id="add-option" class="small-button" disabled>Add option</button>
+            </div>
+            <div id="options-scroll">
+              <table id="decision-options" aria-label="Options">
+                <colgroup><col class="id-column"><col></colgroup>
+                <thead><tr><th scope="col">ID</th><th scope="col">Description</th></tr></thead>
+                <tbody id="option-rows"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <div id="action-bar">
+            <button id="run-decision" type="submit" class="primary" disabled>Run decision</button>
+            <button id="restore-example" type="button" disabled>Restore example</button>
+            <div id="run-status" role="status" aria-live="polite">Connecting…</div>
+          </div>
+        </form>
+
+        <section id="result-panel" aria-labelledby="result-title">
+          <h2 id="result-title">Result</h2>
+          <div id="result-content" class="decision-result">
+            <div class="result-summary">
+              <div id="result-winner" class="result-winner empty-winner">No result yet</div>
+              <div id="result-meta" class="result-meta">Click Run decision to see the probabilities.</div>
+            </div>
+            <div id="probability-list" class="probability-list" aria-label="Option probabilities"></div>
+            <div id="result-legend" class="result-legend"></div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

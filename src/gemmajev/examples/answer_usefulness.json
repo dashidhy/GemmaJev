@@ -1,0 +1,10 @@
+{
+  "task": "Evaluate how useful the proposed answer is for the user's request. Use the request and answer provided to choose the best rating.",
+  "state": "User request: Suggest two free activities for a rainy afternoon at home.\nProposed answer: Read a book you already own, or play a word game with a friend.",
+  "query": "How well does the proposed answer satisfy the user's request?",
+  "options": {
+    "useful": "The answer directly satisfies the request, including its stated constraints.",
+    "partial": "The answer addresses the request but misses an important part or constraint.",
+    "unhelpful": "The answer does not provide useful help with the request."
+  }
+}

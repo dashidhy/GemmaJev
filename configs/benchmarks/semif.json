@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "repository": "TheoLeeCJ/SemIf",
+  "revision": "1f2dea3e25379f9dfc98cb83c324f00ab5deda37",
+  "count": 144,
+  "groups": 36,
+  "rows_per_group": 4,
+  "family_counts": {
+    "evidence_interpretation": 48,
+    "rule_application": 48,
+    "candidate_selection": 48
+  },
+  "semantic_id_aliases": {
+    "candidate_selection": {
+      "A": "candidate_a",
+      "B": "candidate_b"
+    }
+  },
+  "source": {
+    "path": "benchmarks/data/authored144.jsonl",
+    "url": "https://raw.githubusercontent.com/TheoLeeCJ/SemIf/1f2dea3e25379f9dfc98cb83c324f00ab5deda37/benchmarks/data/authored144.jsonl",
+    "sha256": "8162d1c73f925af64453f1ec05ef36d583b3815bf698e60f0d454bd11537e079",
+    "size_bytes": 193250,
+    "git_blob_sha1": "c4a7413c0744e64fe5e713384d95ae5bbed49970",
+    "cache_file": "authored144.jsonl"
+  },
+  "annotation_status": "Project-authored synthetic situations, independently model-reviewed labels; not human-adjudicated truth. Original label indices retained.",
+  "license": {
+    "spdx": "MIT",
+    "notice_path": "docs/licenses/semif.txt",
+    "url": "https://raw.githubusercontent.com/TheoLeeCJ/SemIf/1f2dea3e25379f9dfc98cb83c324f00ab5deda37/LICENSE"
+  },
+  "normalized_sha256": "24785798564b4bd3c9415cde5edfbd3a2ae6bf5af634cbf0a326279afad00643",
+  "references": []
+}

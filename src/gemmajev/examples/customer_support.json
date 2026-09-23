@@ -1,0 +1,10 @@
+{
+  "task": "Classify the customer's message by the main help they need. Choose the option that best matches the request.",
+  "state": "Customer message: I ordered a jacket last week. The delivery date has passed, but the package still hasn't arrived. Can you check where it is?",
+  "query": "What kind of help does this customer need?",
+  "options": {
+    "delivery": "Track an order or resolve a late or missing delivery.",
+    "refund": "Return a received item or request a refund.",
+    "product": "Ask about a product's features, sizing, or availability."
+  }
+}

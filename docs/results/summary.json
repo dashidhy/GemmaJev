@@ -1,0 +1,452 @@
+{
+  "schema_version": 1,
+  "measurements": "Retained measured predictions, rescored for this release; no new model inference performed by the export.",
+  "hardware": "macOS; Apple M2 Pro; 16 GiB unified memory; Metal GPU",
+  "models": {
+    "e4b": {
+      "size_bytes": 5154941280,
+      "sha256": "676c35070db6dbe52f93e9c864ee0fba4eddea94b9c875d9cb10daff453fbaee",
+      "repository": "google/gemma-4-E4B-it-qat-q4_0-gguf",
+      "revision": "4b4a2c1d584be7264f87aac328a1bc739ce81b6c",
+      "filename": "gemma-4-E4B_q4_0-it.gguf",
+      "quantization": "QAT Q4_0"
+    },
+    "12b": {
+      "size_bytes": 6975879296,
+      "sha256": "93567e57a8fe10b23569b9d9ec38cd005deedf71e29477c421a4b83f418a538b",
+      "repository": "google/gemma-4-12B-it-qat-q4_0-gguf",
+      "revision": "29d097773436b69ff9feafd636ab4cf873786537",
+      "filename": "gemma-4-12b-it-qat-q4_0.gguf",
+      "quantization": "QAT Q4_0"
+    }
+  },
+  "counts": {
+    "per_model": 4588,
+    "predictions": 9176,
+    "datasets": {
+      "ag_news": 200,
+      "boolq": 200,
+      "mmlu": 200,
+      "logiqa": 200,
+      "anli_r3": 200,
+      "emotion": 200,
+      "essay_or_readability": 200,
+      "banking20": 300,
+      "newsgroups": 300,
+      "injection": 300,
+      "typed_decisions": 2000,
+      "authored144": 144,
+      "wanli": 144
+    }
+  },
+  "protocol": {
+    "candidate_softmax": true,
+    "temperature": 1.0,
+    "context_tokens": 4096,
+    "request_order": "Fixed source order within each task; final generic template; candidate-only softmax.",
+    "request_hash": "SHA-256 of UTF-8 JSON with sorted object keys, ensure_ascii=False and compact separators; option order also preserved in option_ids.",
+    "latency_scope": "Serial request wall time including cold/prefix-cache-reused calls; excludes model load and cooling. External hardware and batching differ.",
+    "recorded_runtime_sha256": "ca2775ffceaacc46679b423746b25ba393751e0fc1495331375421198cb6fd10",
+    "recorded_llama_cpp_revision": "8086439a4cea94c71a5dfb8fe4ad1546aebd640f",
+    "recorded_batches": [
+      {
+        "datasets": [
+          "ag_news",
+          "boolq",
+          "mmlu",
+          "logiqa",
+          "anli_r3",
+          "emotion",
+          "essay_or_readability"
+        ],
+        "max_decisions": 64,
+        "max_seconds": 45,
+        "cooldown_seconds": 30,
+        "boundary": "Finish the current source group before releasing the worker."
+      },
+      {
+        "datasets": [
+          "banking20",
+          "newsgroups",
+          "injection",
+          "typed_decisions",
+          "authored144"
+        ],
+        "max_decisions": 64,
+        "max_seconds": 60,
+        "cooldown_seconds": 30,
+        "boundary": "Finish the current source group before releasing the worker."
+      },
+      {
+        "datasets": [
+          "wanli"
+        ],
+        "max_decisions": 64,
+        "max_seconds": null,
+        "cooldown_seconds": 30,
+        "boundary": "Fixed sequential batches of 64, 64 and 16 requests per model; no elapsed-time batch cap."
+      }
+    ]
+  },
+  "results": {
+    "12b": {
+      "ag_news": {
+        "n": 200,
+        "correct": 165,
+        "accuracy": 0.825,
+        "source_groups": 200,
+        "macro_f1": 0.8126872318238543,
+        "latency_ms": {
+          "n": 200,
+          "mean": 933.1776277639437,
+          "p50": 886.6455624811351,
+          "p95": 1169.5254605729133
+        }
+      },
+      "anli_r3": {
+        "n": 200,
+        "correct": 105,
+        "accuracy": 0.525,
+        "source_groups": 194,
+        "macro_f1": 0.5012307953484424,
+        "latency_ms": {
+          "n": 200,
+          "mean": 1143.1647620815784,
+          "p50": 1046.880853944458,
+          "p95": 1461.341744079254
+        }
+      },
+      "authored144": {
+        "n": 144,
+        "correct": 138,
+        "accuracy": 0.9583333333333334,
+        "source_groups": 36,
+        "latency_ms": {
+          "n": 144,
+          "mean": 459.6729935955308,
+          "p50": 455.14450035989285,
+          "p95": 610.1766956737265
+        }
+      },
+      "banking20": {
+        "n": 300,
+        "correct": 257,
+        "accuracy": 0.8566666666666667,
+        "source_groups": 300,
+        "macro_f1": 0.8583969510258651,
+        "latency_ms": {
+          "n": 300,
+          "mean": 1354.467113489906,
+          "p50": 1331.7227709339932,
+          "p95": 1484.8210975993425
+        }
+      },
+      "boolq": {
+        "n": 200,
+        "correct": 179,
+        "accuracy": 0.895,
+        "source_groups": 198,
+        "macro_f1": 0.8947869435607105,
+        "auroc": 0.941,
+        "latency_ms": {
+          "n": 200,
+          "mean": 1048.5640791407786,
+          "p50": 1026.4827290084213,
+          "p95": 1609.3752726446837
+        }
+      },
+      "emotion": {
+        "n": 200,
+        "correct": 95,
+        "accuracy": 0.475,
+        "source_groups": 200,
+        "macro_f1": 0.4360177911195198,
+        "latency_ms": {
+          "n": 200,
+          "mean": 918.9920735533815,
+          "p50": 888.2939164759591,
+          "p95": 1032.0771412109025
+        }
+      },
+      "essay_or_readability": {
+        "n": 200,
+        "correct": 73,
+        "accuracy": 0.365,
+        "source_groups": 179,
+        "score_n": 200,
+        "score_mae": 1.0228040891025512,
+        "spearman": 0.5676151058796008,
+        "latency_ms": {
+          "n": 200,
+          "mean": 3546.8952602066565,
+          "p50": 3283.484958461486,
+          "p95": 6413.514752266926
+        }
+      },
+      "injection": {
+        "n": 300,
+        "correct": 280,
+        "accuracy": 0.9333333333333333,
+        "source_groups": 300,
+        "macro_f1": 0.9287613981762918,
+        "latency_ms": {
+          "n": 300,
+          "mean": 413.261804630359,
+          "p50": 323.2668329728767,
+          "p95": 718.5646652360447
+        }
+      },
+      "logiqa": {
+        "n": 200,
+        "correct": 98,
+        "accuracy": 0.49,
+        "source_groups": 187,
+        "latency_ms": {
+          "n": 200,
+          "mean": 1234.0502839768305,
+          "p50": 1177.0113540114835,
+          "p95": 1748.9842084702104
+        }
+      },
+      "mmlu": {
+        "n": 200,
+        "correct": 146,
+        "accuracy": 0.73,
+        "source_groups": 200,
+        "latency_ms": {
+          "n": 200,
+          "mean": 749.307969174115,
+          "p50": 738.2986460579559,
+          "p95": 1212.4989274772813
+        }
+      },
+      "newsgroups": {
+        "n": 300,
+        "correct": 204,
+        "accuracy": 0.68,
+        "source_groups": 300,
+        "macro_f1": 0.683062171344303,
+        "latency_ms": {
+          "n": 300,
+          "mean": 1856.9160594348796,
+          "p50": 1622.0855835126713,
+          "p95": 3437.566871114541
+        }
+      },
+      "typed_decisions": {
+        "n": 2000,
+        "correct": 1450,
+        "accuracy": 0.725,
+        "source_groups": 400,
+        "score_n": 800,
+        "score_mae": 0.45302328342160136,
+        "latency_ms": {
+          "n": 2000,
+          "mean": 768.3608972765505,
+          "p50": 482.74010396562517,
+          "p95": 2369.570087804459
+        }
+      },
+      "wanli": {
+        "n": 144,
+        "correct": 109,
+        "accuracy": 0.7569444444444444,
+        "source_groups": 144,
+        "macro_f1": 0.7570048309178744,
+        "latency_ms": {
+          "n": 144,
+          "mean": 506.20103618712164,
+          "p50": 455.9873124817386,
+          "p95": 605.5574954021722
+        }
+      }
+    },
+    "e4b": {
+      "ag_news": {
+        "n": 200,
+        "correct": 169,
+        "accuracy": 0.845,
+        "source_groups": 200,
+        "macro_f1": 0.8436887493653549,
+        "latency_ms": {
+          "n": 200,
+          "mean": 363.49056290695444,
+          "p50": 353.3951046410948,
+          "p95": 452.68724381458014
+        }
+      },
+      "anli_r3": {
+        "n": 200,
+        "correct": 90,
+        "accuracy": 0.45,
+        "source_groups": 194,
+        "macro_f1": 0.3947298687616736,
+        "latency_ms": {
+          "n": 200,
+          "mean": 440.8825252088718,
+          "p50": 408.5885619278997,
+          "p95": 565.067024610471
+        }
+      },
+      "authored144": {
+        "n": 144,
+        "correct": 118,
+        "accuracy": 0.8194444444444444,
+        "source_groups": 36,
+        "latency_ms": {
+          "n": 144,
+          "mean": 182.96329310396686,
+          "p50": 186.3617915660143,
+          "p95": 236.14423314575106
+        }
+      },
+      "banking20": {
+        "n": 300,
+        "correct": 253,
+        "accuracy": 0.8433333333333334,
+        "source_groups": 300,
+        "macro_f1": 0.8371755804536848,
+        "latency_ms": {
+          "n": 300,
+          "mean": 526.6654240014032,
+          "p50": 522.1948120743036,
+          "p95": 577.9306455049664
+        }
+      },
+      "boolq": {
+        "n": 200,
+        "correct": 170,
+        "accuracy": 0.85,
+        "source_groups": 198,
+        "macro_f1": 0.8492613807657522,
+        "auroc": 0.9144,
+        "latency_ms": {
+          "n": 200,
+          "mean": 399.5657056046184,
+          "p50": 401.03666693903506,
+          "p95": 617.8560235421173
+        }
+      },
+      "emotion": {
+        "n": 200,
+        "correct": 99,
+        "accuracy": 0.495,
+        "source_groups": 200,
+        "macro_f1": 0.46314918185659043,
+        "latency_ms": {
+          "n": 200,
+          "mean": 363.8805412547663,
+          "p50": 354.9335419666022,
+          "p95": 405.9759874944575
+        }
+      },
+      "essay_or_readability": {
+        "n": 200,
+        "correct": 65,
+        "accuracy": 0.325,
+        "source_groups": 179,
+        "score_n": 200,
+        "score_mae": 1.081453520307306,
+        "spearman": 0.46859324524659685,
+        "latency_ms": {
+          "n": 200,
+          "mean": 1345.351616620319,
+          "p50": 1278.485874994658,
+          "p95": 2271.4974417584012
+        }
+      },
+      "injection": {
+        "n": 300,
+        "correct": 254,
+        "accuracy": 0.8466666666666667,
+        "source_groups": 300,
+        "macro_f1": 0.8275,
+        "latency_ms": {
+          "n": 300,
+          "mean": 163.96340582830211,
+          "p50": 132.68750009592623,
+          "p95": 249.16658351430706
+        }
+      },
+      "logiqa": {
+        "n": 200,
+        "correct": 69,
+        "accuracy": 0.345,
+        "source_groups": 187,
+        "latency_ms": {
+          "n": 200,
+          "mean": 472.80335397459567,
+          "p50": 457.4895416153595,
+          "p95": 673.8278174307197
+        }
+      },
+      "mmlu": {
+        "n": 200,
+        "correct": 132,
+        "accuracy": 0.66,
+        "source_groups": 200,
+        "latency_ms": {
+          "n": 200,
+          "mean": 288.34212731337175,
+          "p50": 288.7724169995636,
+          "p95": 459.6078855916853
+        }
+      },
+      "newsgroups": {
+        "n": 300,
+        "correct": 190,
+        "accuracy": 0.6333333333333333,
+        "source_groups": 300,
+        "macro_f1": 0.6475124001029035,
+        "latency_ms": {
+          "n": 300,
+          "mean": 706.5138778005106,
+          "p50": 610.3059790330008,
+          "p95": 1292.6571457763202
+        }
+      },
+      "typed_decisions": {
+        "n": 2000,
+        "correct": 1348,
+        "accuracy": 0.674,
+        "source_groups": 400,
+        "score_n": 800,
+        "score_mae": 0.42356985579128287,
+        "latency_ms": {
+          "n": 2000,
+          "mean": 297.4954869906651,
+          "p50": 196.3011040352285,
+          "p95": 906.6605793312192
+        }
+      },
+      "wanli": {
+        "n": 144,
+        "correct": 101,
+        "accuracy": 0.7013888888888888,
+        "source_groups": 144,
+        "macro_f1": 0.7016616468949127,
+        "latency_ms": {
+          "n": 144,
+          "mean": 199.0949702206611,
+          "p50": 187.08847893867642,
+          "p95": 237.43120800936595
+        }
+      }
+    }
+  },
+  "archive": {
+    "file": "predictions.jsonl.gz",
+    "sha256": "e226c97d6c8e388a660156a23b2347e0e7d7306807afb384e4e64df471c00b05",
+    "rows": 9176
+  },
+  "references": {
+    "file": "references.json",
+    "sha256": "5cb35049e567727ea6b4bf7b32d9cf53d2c64c68f8560aad1eb5f99e024b6a40"
+  },
+  "dataset_manifests": {
+    "anyjev.json": "7c962308f5107e6d64076003f965d77f0931dd78b521649249c24f69fe422bf6",
+    "jev.json": "ab16bc78c7cd04ac492dbc51dfe3d06113b50a12fa8d06e4071990ebfeb06c6a",
+    "semif.json": "81d0b3fdfaddeeed5ab941212e94cecd409c2939198179bc7df06b39355be5ee",
+    "wanli.json": "d144fc6c4a5dccc0959162fe3411824419e205dd349bda02779e0e23a939f751"
+  }
+}

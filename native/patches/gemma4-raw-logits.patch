@@ -1,0 +1,12 @@
+diff --git a/src/models/gemma4.cpp b/src/models/gemma4.cpp
+--- a/src/models/gemma4.cpp
++++ b/src/models/gemma4.cpp
+@@ -432,7 +432,7 @@
+     // apply logits bias if needed (e.g. for gemma4_unified patch)
+     // this is to mirror the suppress_tokens patch on transformers, to avoid model from outputing <image|> and <audio|> tokens (which is a known issue related to the checkpoint)
+     // TODO: maybe handle this inside the sampling system in the future
+-    if (!model.vocab.get_suppress_tokens().empty()) {
++    if (false) { // GemmaJev: retain unmasked vocabulary logits for policy scoring.
+         auto inp_bias = std::make_unique<llm_graph_input_logits_bias>(model.vocab);
+         inp_bias->logits_bias = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, inp_bias->arr.size());
+         cur = ggml_add(ctx0, cur, inp_bias->logits_bias);

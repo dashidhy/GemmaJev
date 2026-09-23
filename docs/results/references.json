@@ -1,0 +1,501 @@
+[
+  {
+    "dataset": "ag_news",
+    "system": "TypeSafe Jev 1.13.0",
+    "configuration": "API",
+    "metrics": {
+      "n": 200,
+      "accuracy": 0.87
+    },
+    "source": {
+      "url": "https://raw.githubusercontent.com/OmarMujahid/jev-decision-bench/0883fa781729ab571005253f6b288ec67f49dd29/report.json",
+      "revision": "0883fa781729ab571005253f6b288ec67f49dd29",
+      "sha256": "50948385cfe7e23e1b93e5882feea4ca4899f4c0cb7abdd814bf14e09cfe9886"
+    },
+    "scope": "Published community API measurement; source recipe reconstructed, historical input identity not proven."
+  },
+  {
+    "dataset": "boolq",
+    "system": "TypeSafe Jev 1.13.0",
+    "configuration": "API",
+    "metrics": {
+      "n": 200,
+      "auroc": 0.9692,
+      "accuracy": 0.915
+    },
+    "source": {
+      "url": "https://raw.githubusercontent.com/OmarMujahid/jev-decision-bench/0883fa781729ab571005253f6b288ec67f49dd29/report.json",
+      "revision": "0883fa781729ab571005253f6b288ec67f49dd29",
+      "sha256": "50948385cfe7e23e1b93e5882feea4ca4899f4c0cb7abdd814bf14e09cfe9886"
+    },
+    "scope": "Published community API measurement; source recipe reconstructed, historical input identity not proven."
+  },
+  {
+    "dataset": "mmlu",
+    "system": "TypeSafe Jev 1.13.0",
+    "configuration": "API",
+    "metrics": {
+      "n": 200,
+      "accuracy": 0.935
+    },
+    "source": {
+      "url": "https://raw.githubusercontent.com/OmarMujahid/jev-decision-bench/0883fa781729ab571005253f6b288ec67f49dd29/report.json",
+      "revision": "0883fa781729ab571005253f6b288ec67f49dd29",
+      "sha256": "50948385cfe7e23e1b93e5882feea4ca4899f4c0cb7abdd814bf14e09cfe9886"
+    },
+    "scope": "Published community API measurement; source recipe reconstructed, historical input identity not proven."
+  },
+  {
+    "dataset": "logiqa",
+    "system": "TypeSafe Jev 1.13.0",
+    "configuration": "API",
+    "metrics": {
+      "n": 200,
+      "accuracy": 0.765
+    },
+    "source": {
+      "url": "https://raw.githubusercontent.com/OmarMujahid/jev-decision-bench/0883fa781729ab571005253f6b288ec67f49dd29/report.json",
+      "revision": "0883fa781729ab571005253f6b288ec67f49dd29",
+      "sha256": "50948385cfe7e23e1b93e5882feea4ca4899f4c0cb7abdd814bf14e09cfe9886"
+    },
+    "scope": "Published community API measurement; source recipe reconstructed, historical input identity not proven."
+  },
+  {
+    "dataset": "anli_r3",
+    "system": "TypeSafe Jev 1.13.0",
+    "configuration": "API",
+    "metrics": {
+      "n": 200,
+      "accuracy": 0.66
+    },
+    "source": {
+      "url": "https://raw.githubusercontent.com/OmarMujahid/jev-decision-bench/0883fa781729ab571005253f6b288ec67f49dd29/report.json",
+      "revision": "0883fa781729ab571005253f6b288ec67f49dd29",
+      "sha256": "50948385cfe7e23e1b93e5882feea4ca4899f4c0cb7abdd814bf14e09cfe9886"
+    },
+    "scope": "Published community API measurement; source recipe reconstructed, historical input identity not proven."
+  },
+  {
+    "dataset": "emotion",
+    "system": "TypeSafe Jev 1.13.0",
+    "configuration": "API",
+    "metrics": {
+      "n": 200,
+      "accuracy": 0.505
+    },
+    "source": {
+      "url": "https://raw.githubusercontent.com/OmarMujahid/jev-decision-bench/0883fa781729ab571005253f6b288ec67f49dd29/report.json",
+      "revision": "0883fa781729ab571005253f6b288ec67f49dd29",
+      "sha256": "50948385cfe7e23e1b93e5882feea4ca4899f4c0cb7abdd814bf14e09cfe9886"
+    },
+    "scope": "Published community API measurement; source recipe reconstructed, historical input identity not proven."
+  },
+  {
+    "dataset": "essay_or_readability",
+    "system": "TypeSafe Jev 1.13.0",
+    "configuration": "API",
+    "metrics": {
+      "n": 200,
+      "spearman": 0.49019306299080834
+    },
+    "source": {
+      "url": "https://raw.githubusercontent.com/OmarMujahid/jev-decision-bench/0883fa781729ab571005253f6b288ec67f49dd29/report.json",
+      "revision": "0883fa781729ab571005253f6b288ec67f49dd29",
+      "sha256": "50948385cfe7e23e1b93e5882feea4ca4899f4c0cb7abdd814bf14e09cfe9886"
+    },
+    "scope": "Published community API measurement; source recipe reconstructed, historical input identity not proven."
+  },
+  {
+    "dataset": "banking20",
+    "system": "Qwen/Qwen2.5-7B-Instruct",
+    "provider": "AnyJev",
+    "configuration": "raw",
+    "metrics": {
+      "n": 300,
+      "macro_f1": 0.7376786960761179,
+      "accuracy": 0.7233333333333334
+    },
+    "source": {
+      "url": "https://raw.githubusercontent.com/nokia-applied-research/AnyJev/78ca550268eefa4b4ed7b34f377b475597e4f51b/bench/results_batchprior_v0/2026-09-20/Qwen__Qwen2.5-7B-Instruct.json",
+      "sha256": "8dbe641434658d88dcf0a662fed5792b561b9086b9ebd417effa728175088e65"
+    },
+    "scope": "Deterministic published loader/seed reconstructed on pinned datasets last modified before the upstream runs. Upstream did not publish evaluated item IDs or per-item predictions; aggregate references cannot support paired cross-system intervals or error intersections.",
+    "conditions": {
+      "supervision": "no task-label fit; L0 may use test-batch prior and multiple permutations",
+      "precision": "bfloat16 (AnyJev HF backend default)",
+      "model_revision": "not pinned in upstream results",
+      "level_readout": {
+        "published_level": "raw",
+        "effective_prior": "none",
+        "permutation_readout": "first recorded permutation only",
+        "source": "https://github.com/nokia-applied-research/AnyJev/blob/78ca550268eefa4b4ed7b34f377b475597e4f51b/bench/run.py#L35",
+        "source_function": "_rows_from_diagnostics",
+        "recorded_permutation_policy": "Choice uses cyclic shifts, not all factorial permutations; Noul records the two Yes/No orders; ordered Score retains the identity ordering.",
+        "permutation_source": "https://github.com/nokia-applied-research/AnyJev/blob/78ca550268eefa4b4ed7b34f377b475597e4f51b/anyjev/decider.py",
+        "scope": "A diagnostic transformation of the saved forward-pass probabilities. cf uses cf_prior, not the top-level batch prior; no unreported combination or permutation behavior is inferred."
+      }
+    }
+  },
+  {
+    "dataset": "banking20",
+    "system": "Qwen/Qwen2.5-7B-Instruct",
+    "provider": "AnyJev",
+    "configuration": "L1",
+    "metrics": {
+      "n": 300,
+      "macro_f1": 0.7812049024001314,
+      "accuracy": 0.7666666666666667
+    },
+    "source": {
+      "url": "https://raw.githubusercontent.com/nokia-applied-research/AnyJev/78ca550268eefa4b4ed7b34f377b475597e4f51b/bench/results_batchprior_v0/2026-09-20/Qwen__Qwen2.5-7B-Instruct.json",
+      "sha256": "8dbe641434658d88dcf0a662fed5792b561b9086b9ebd417effa728175088e65"
+    },
+    "scope": "Deterministic published loader/seed reconstructed on pinned datasets last modified before the upstream runs. Upstream did not publish evaluated item IDs or per-item predictions; aggregate references cannot support paired cross-system intervals or error intersections.",
+    "conditions": {
+      "supervision": "temperature fit on 200 calibration items",
+      "precision": "bfloat16 (AnyJev HF backend default)",
+      "model_revision": "not pinned in upstream results",
+      "level_readout": {
+        "published_level": "L1",
+        "scope": "Preserved as published; no additional effective-prior interpretation inferred for this level."
+      }
+    }
+  },
+  {
+    "dataset": "injection",
+    "system": "Qwen/Qwen2.5-7B-Instruct",
+    "provider": "AnyJev",
+    "configuration": "raw",
+    "metrics": {
+      "n": 300,
+      "macro_f1": 0.6746248575625695,
+      "accuracy": 0.7366666666666667
+    },
+    "source": {
+      "url": "https://raw.githubusercontent.com/nokia-applied-research/AnyJev/78ca550268eefa4b4ed7b34f377b475597e4f51b/bench/results_batchprior_v0/2026-09-20/Qwen__Qwen2.5-7B-Instruct.json",
+      "sha256": "8dbe641434658d88dcf0a662fed5792b561b9086b9ebd417effa728175088e65"
+    },
+    "scope": "Deterministic published loader/seed reconstructed on pinned datasets last modified before the upstream runs. Upstream did not publish evaluated item IDs or per-item predictions; aggregate references cannot support paired cross-system intervals or error intersections.",
+    "conditions": {
+      "supervision": "no task-label fit; L0 may use test-batch prior and multiple permutations",
+      "precision": "bfloat16 (AnyJev HF backend default)",
+      "model_revision": "not pinned in upstream results",
+      "level_readout": {
+        "published_level": "raw",
+        "effective_prior": "none",
+        "permutation_readout": "first recorded permutation only",
+        "source": "https://github.com/nokia-applied-research/AnyJev/blob/78ca550268eefa4b4ed7b34f377b475597e4f51b/bench/run.py#L35",
+        "source_function": "_rows_from_diagnostics",
+        "recorded_permutation_policy": "Choice uses cyclic shifts, not all factorial permutations; Noul records the two Yes/No orders; ordered Score retains the identity ordering.",
+        "permutation_source": "https://github.com/nokia-applied-research/AnyJev/blob/78ca550268eefa4b4ed7b34f377b475597e4f51b/anyjev/decider.py",
+        "scope": "A diagnostic transformation of the saved forward-pass probabilities. cf uses cf_prior, not the top-level batch prior; no unreported combination or permutation behavior is inferred."
+      }
+    }
+  },
+  {
+    "dataset": "injection",
+    "system": "Qwen/Qwen2.5-7B-Instruct",
+    "provider": "AnyJev",
+    "configuration": "L1",
+    "metrics": {
+      "n": 300,
+      "macro_f1": 0.7778799019607843,
+      "accuracy": 0.8066666666666666
+    },
+    "source": {
+      "url": "https://raw.githubusercontent.com/nokia-applied-research/AnyJev/78ca550268eefa4b4ed7b34f377b475597e4f51b/bench/results_batchprior_v0/2026-09-20/Qwen__Qwen2.5-7B-Instruct.json",
+      "sha256": "8dbe641434658d88dcf0a662fed5792b561b9086b9ebd417effa728175088e65"
+    },
+    "scope": "Deterministic published loader/seed reconstructed on pinned datasets last modified before the upstream runs. Upstream did not publish evaluated item IDs or per-item predictions; aggregate references cannot support paired cross-system intervals or error intersections.",
+    "conditions": {
+      "supervision": "temperature fit on 200 calibration items",
+      "precision": "bfloat16 (AnyJev HF backend default)",
+      "model_revision": "not pinned in upstream results",
+      "level_readout": {
+        "published_level": "L1",
+        "scope": "Preserved as published; no additional effective-prior interpretation inferred for this level."
+      }
+    }
+  },
+  {
+    "dataset": "newsgroups",
+    "system": "Qwen/Qwen2.5-7B-Instruct",
+    "provider": "AnyJev",
+    "configuration": "raw",
+    "metrics": {
+      "n": 300,
+      "macro_f1": 0.6699090841650991,
+      "accuracy": 0.66
+    },
+    "source": {
+      "url": "https://raw.githubusercontent.com/nokia-applied-research/AnyJev/78ca550268eefa4b4ed7b34f377b475597e4f51b/bench/results_batchprior_v0/2026-09-20/Qwen__Qwen2.5-7B-Instruct.json",
+      "sha256": "8dbe641434658d88dcf0a662fed5792b561b9086b9ebd417effa728175088e65"
+    },
+    "scope": "Deterministic published loader/seed reconstructed on pinned datasets last modified before the upstream runs. Upstream did not publish evaluated item IDs or per-item predictions; aggregate references cannot support paired cross-system intervals or error intersections.",
+    "conditions": {
+      "supervision": "no task-label fit; L0 may use test-batch prior and multiple permutations",
+      "precision": "bfloat16 (AnyJev HF backend default)",
+      "model_revision": "not pinned in upstream results",
+      "level_readout": {
+        "published_level": "raw",
+        "effective_prior": "none",
+        "permutation_readout": "first recorded permutation only",
+        "source": "https://github.com/nokia-applied-research/AnyJev/blob/78ca550268eefa4b4ed7b34f377b475597e4f51b/bench/run.py#L35",
+        "source_function": "_rows_from_diagnostics",
+        "recorded_permutation_policy": "Choice uses cyclic shifts, not all factorial permutations; Noul records the two Yes/No orders; ordered Score retains the identity ordering.",
+        "permutation_source": "https://github.com/nokia-applied-research/AnyJev/blob/78ca550268eefa4b4ed7b34f377b475597e4f51b/anyjev/decider.py",
+        "scope": "A diagnostic transformation of the saved forward-pass probabilities. cf uses cf_prior, not the top-level batch prior; no unreported combination or permutation behavior is inferred."
+      }
+    }
+  },
+  {
+    "dataset": "newsgroups",
+    "system": "Qwen/Qwen2.5-7B-Instruct",
+    "provider": "AnyJev",
+    "configuration": "L1",
+    "metrics": {
+      "n": 300,
+      "macro_f1": 0.7135192119007938,
+      "accuracy": 0.7066666666666667
+    },
+    "source": {
+      "url": "https://raw.githubusercontent.com/nokia-applied-research/AnyJev/78ca550268eefa4b4ed7b34f377b475597e4f51b/bench/results_batchprior_v0/2026-09-20/Qwen__Qwen2.5-7B-Instruct.json",
+      "sha256": "8dbe641434658d88dcf0a662fed5792b561b9086b9ebd417effa728175088e65"
+    },
+    "scope": "Deterministic published loader/seed reconstructed on pinned datasets last modified before the upstream runs. Upstream did not publish evaluated item IDs or per-item predictions; aggregate references cannot support paired cross-system intervals or error intersections.",
+    "conditions": {
+      "supervision": "temperature fit on 200 calibration items",
+      "precision": "bfloat16 (AnyJev HF backend default)",
+      "model_revision": "not pinned in upstream results",
+      "level_readout": {
+        "published_level": "L1",
+        "scope": "Preserved as published; no additional effective-prior interpretation inferred for this level."
+      }
+    }
+  },
+  {
+    "dataset": "typed_decisions",
+    "system": "Qwen/Qwen2.5-7B-Instruct",
+    "provider": "AnyJev",
+    "configuration": "raw",
+    "metrics": {
+      "n": 2000,
+      "score_mae": 0.4374705198054757,
+      "accuracy": 0.6205,
+      "score_n": 800
+    },
+    "source": {
+      "url": "https://raw.githubusercontent.com/nokia-applied-research/AnyJev/78ca550268eefa4b4ed7b34f377b475597e4f51b/bench/results_typed/2026-09-21/Qwen__Qwen2.5-7B-Instruct.json",
+      "sha256": "b85bd6ccc534a52c48cec9af383d56ad4f6a5f8cdf41dc5b193e46a5f1c0b406"
+    },
+    "scope": "Deterministic published loader/seed reconstructed on pinned datasets last modified before the upstream runs. Upstream did not publish evaluated item IDs or per-item predictions; aggregate references cannot support paired cross-system intervals or error intersections.",
+    "conditions": {
+      "supervision": "no task-label fit; L0 may use test-batch prior and multiple permutations",
+      "precision": "bfloat16 (AnyJev HF backend default)",
+      "model_revision": "not pinned in upstream results",
+      "level_readout": {
+        "published_level": "raw",
+        "effective_prior": "none",
+        "permutation_readout": "first recorded permutation only",
+        "source": "https://github.com/nokia-applied-research/AnyJev/blob/78ca550268eefa4b4ed7b34f377b475597e4f51b/bench/run.py#L35",
+        "source_function": "_rows_from_diagnostics",
+        "recorded_permutation_policy": "Choice uses cyclic shifts, not all factorial permutations; Noul records the two Yes/No orders; ordered Score retains the identity ordering.",
+        "permutation_source": "https://github.com/nokia-applied-research/AnyJev/blob/78ca550268eefa4b4ed7b34f377b475597e4f51b/anyjev/decider.py",
+        "scope": "A diagnostic transformation of the saved forward-pass probabilities. cf uses cf_prior, not the top-level batch prior; no unreported combination or permutation behavior is inferred."
+      }
+    }
+  },
+  {
+    "dataset": "typed_decisions",
+    "system": "Qwen/Qwen2.5-7B-Instruct",
+    "provider": "AnyJev",
+    "configuration": "L1",
+    "metrics": {
+      "n": 2000,
+      "score_mae": 0.4427430829110169,
+      "accuracy": 0.632,
+      "score_n": 800
+    },
+    "source": {
+      "url": "https://raw.githubusercontent.com/nokia-applied-research/AnyJev/78ca550268eefa4b4ed7b34f377b475597e4f51b/bench/results_typed/2026-09-21/Qwen__Qwen2.5-7B-Instruct.json",
+      "sha256": "b85bd6ccc534a52c48cec9af383d56ad4f6a5f8cdf41dc5b193e46a5f1c0b406"
+    },
+    "scope": "Deterministic published loader/seed reconstructed on pinned datasets last modified before the upstream runs. Upstream did not publish evaluated item IDs or per-item predictions; aggregate references cannot support paired cross-system intervals or error intersections.",
+    "conditions": {
+      "supervision": "per-question temperature fit on 200 train cases/1000 decisions",
+      "precision": "bfloat16 (AnyJev HF backend default)",
+      "model_revision": "not pinned in upstream results",
+      "level_readout": {
+        "published_level": "L1",
+        "scope": "Preserved as published; no additional effective-prior interpretation inferred for this level."
+      }
+    }
+  },
+  {
+    "dataset": "typed_decisions",
+    "system": "Qwen/Qwen3-32B",
+    "provider": "AnyJev",
+    "configuration": "L1",
+    "metrics": {
+      "n": 2000,
+      "score_mae": 0.4121724793742066,
+      "accuracy": 0.7005,
+      "score_n": 800
+    },
+    "source": {
+      "url": "https://raw.githubusercontent.com/nokia-applied-research/AnyJev/78ca550268eefa4b4ed7b34f377b475597e4f51b/bench/results_typed/2026-09-21/Qwen__Qwen3-32B.json",
+      "sha256": "64acf8fc99f959f757c2bbdd258eae0f62b891e94100e8558f3a75b19cb7ce9e"
+    },
+    "scope": "Deterministic published loader/seed reconstructed on pinned datasets last modified before the upstream runs. Upstream did not publish evaluated item IDs or per-item predictions; aggregate references cannot support paired cross-system intervals or error intersections.",
+    "conditions": {
+      "supervision": "per-question temperature fit on 200 train cases/1000 decisions",
+      "precision": "bfloat16 (AnyJev HF backend default)",
+      "model_revision": "not pinned in upstream results",
+      "level_readout": {
+        "published_level": "L1",
+        "scope": "Preserved as published; no additional effective-prior interpretation inferred for this level."
+      }
+    }
+  },
+  {
+    "dataset": "typed_decisions",
+    "system": "convaiinnovations/laya-typed-decisions",
+    "provider": "Laya",
+    "configuration": "fine_tuned",
+    "metrics": {
+      "n": 2000,
+      "score_mae": 0.24253370550275777,
+      "accuracy": 0.768,
+      "score_n": 800
+    },
+    "source": {
+      "url": "https://raw.githubusercontent.com/nokia-applied-research/AnyJev/78ca550268eefa4b4ed7b34f377b475597e4f51b/bench/results_typed/2026-09-21/laya__convaiinnovations__laya-typed-decisions.json",
+      "sha256": "fd1e2b8435b2d9e5fa1194f71ac0a73bd157900d808e629f3e78ad2d9d3abe73"
+    },
+    "scope": "Deterministic published loader/seed reconstructed on pinned datasets last modified before the upstream runs. Upstream did not publish evaluated item IDs or per-item predictions; aggregate references cannot support paired cross-system intervals or error intersections.",
+    "conditions": {
+      "supervision": "Fine-tuned on the typed-decisions training split.",
+      "precision": "not recorded in this provider artifact",
+      "model_revision": "not pinned in upstream results",
+      "level_readout": {
+        "published_level": "fine_tuned",
+        "provider": "native_laya",
+        "scope": "Laya predict(state, questions) answers are mapped by the native provider; no AnyJev contextual prior correction or permutation marginalization is applied.",
+        "source": "https://github.com/nokia-applied-research/AnyJev/blob/78ca550268eefa4b4ed7b34f377b475597e4f51b/bench/providers/laya.py#L24"
+      }
+    }
+  },
+  {
+    "dataset": "typed_decisions",
+    "system": "TypeSafe Jev 1.13.0",
+    "provider": "TypeSafe Jev",
+    "configuration": "published_API",
+    "metrics": {
+      "n": 2000,
+      "score_mae": 0.391,
+      "accuracy": 0.727,
+      "score_n": 800
+    },
+    "source": {
+      "url": "https://huggingface.co/datasets/LocalLLaMA/typed-decisions/resolve/ea9306458d6e9563628369a3d1e72e362fb381d2/README.md",
+      "sha256": "b22b2b778f75574c5f7fc832e9d5b4cfe5b02e51e2a308913cd3cabfb0049a49"
+    },
+    "scope": "Usable as a reported full-test aggregate reference. API traces, exact predictions, exact macro-F1 aggregation and original evaluation harness are not present in the inspected dataset repository.",
+    "conditions": {}
+  },
+  {
+    "dataset": "authored144",
+    "system": "Qwen/Qwen3.5-4B",
+    "provider": "SemIf",
+    "configuration": "raw",
+    "metrics": {
+      "n": 144,
+      "correct": 116,
+      "score_n": 0,
+      "accuracy": 0.8055555555555556
+    },
+    "source": {
+      "url": "https://raw.githubusercontent.com/TheoLeeCJ/SemIf/1f2dea3e25379f9dfc98cb83c324f00ab5deda37/results/raw/predictions/direct-authored144.jsonl",
+      "sha256": "7c966285d2bbee3afd04d0bb454ce6a9d88336c7d5968b1fddde99ac7e83c321",
+      "model_revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a"
+    },
+    "scope": "All144 original source IDs and per-item option orders checked; candidate A/B semantic IDs renamed explicitly, never confused with answer-token letters.",
+    "conditions": {
+      "supervision": "frozen checkpoint; no task fine-tuning",
+      "precision": "bfloat16",
+      "hardware": "NVIDIA RTX3090; upstream docs/REPRODUCE.md",
+      "model": {
+        "source": "Qwen/Qwen3.5-4B",
+        "revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+        "adapter": null,
+        "adapter_sha256": null,
+        "adapter_revision": null,
+        "dtype": "bfloat16",
+        "transformers_version": "5.17.0",
+        "torch_version": "2.10.0+cu128",
+        "serving_config": "native-state-prefix-cache-v1"
+      }
+    }
+  },
+  {
+    "dataset": "authored144",
+    "system": "turboderp/Qwen3.8-27B-exl3",
+    "provider": "SemIf",
+    "configuration": "raw",
+    "metrics": {
+      "n": 144,
+      "correct": 138,
+      "score_n": 0,
+      "accuracy": 0.9583333333333334
+    },
+    "source": {
+      "url": "https://raw.githubusercontent.com/TheoLeeCJ/SemIf/1f2dea3e25379f9dfc98cb83c324f00ab5deda37/exl3-bridge/results/authored144-27b-exl3.jsonl",
+      "sha256": "c98abd54bc4f3672ce2785a3662593c5262348e921f7c7d8180a7d53197204cb",
+      "model_revision": "a35e75a73baee51da709329d19294245cbeeb5d8"
+    },
+    "scope": "All144 original source IDs and per-item option orders checked; candidate A/B semantic IDs renamed explicitly, never confused with answer-token letters.",
+    "conditions": {
+      "supervision": "frozen checkpoint; no task fine-tuning",
+      "precision": "exl3 quantized (see quantization_config.json)",
+      "hardware": "Not specified in the EXL3 bridge result artifact",
+      "model": {
+        "source": "turboderp/Qwen3.8-27B-exl3",
+        "dtype": "exl3 quantized (see quantization_config.json)",
+        "runtime": "exllamav3 1.4.4",
+        "torch_version": "2.10.0+cu128",
+        "readout_backend": "exllamav3 Generator/Job(return_logits=True), exl3 kernels",
+        "revision": "a35e75a73baee51da709329d19294245cbeeb5d8"
+      }
+    }
+  },
+  {
+    "dataset": "wanli",
+    "system": "Qwen/Qwen3.5-4B",
+    "provider": "SemIf",
+    "configuration": "raw",
+    "metrics": {
+      "n": 144,
+      "correct": 93,
+      "accuracy": 0.6458333333333334
+    },
+    "source": {
+      "url": "https://raw.githubusercontent.com/TheoLeeCJ/SemIf/1f2dea3e25379f9dfc98cb83c324f00ab5deda37/results/raw/predictions/direct-wanli256.jsonl",
+      "revision": "1f2dea3e25379f9dfc98cb83c324f00ab5deda37",
+      "sha256": "6df364f729ca432ca203cc7d3dde9f45696cd2228c95d1c2d69ca748a2bcb8d4"
+    },
+    "scope": "Exactly the 144 held-out items; prompt/precision differ and only 20/144 option orders match the earlier local presentation.",
+    "conditions": {
+      "model": {
+        "adapter": null,
+        "adapter_revision": null,
+        "adapter_sha256": null,
+        "dtype": "bfloat16",
+        "revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+        "serving_config": "native-state-prefix-cache-v1",
+        "source": "Qwen/Qwen3.5-4B",
+        "torch_version": "2.10.0+cu128",
+        "transformers_version": "5.17.0"
+      }
+    }
+  }
+]
