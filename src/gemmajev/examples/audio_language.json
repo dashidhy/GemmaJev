@@ -1,0 +1,13 @@
+{
+  "task": "Identify the language spoken in the attached audio. Choose English, Japanese, Spanish, or French when that language is spoken. Choose other for another spoken language. Choose unclear for silence, non-speech sounds, or speech whose language cannot be identified.",
+  "state": "The attached audio clip is the item to classify.",
+  "query": "Which option best describes the language of the speech in this clip?",
+  "options": {
+    "english": "English is clearly spoken.",
+    "japanese": "Japanese is clearly spoken.",
+    "spanish": "Spanish is clearly spoken.",
+    "french": "French is clearly spoken.",
+    "other": "A spoken language other than English, Japanese, Spanish, or French, such as Mandarin Chinese or German.",
+    "unclear": "Silence, non-speech sounds, or speech too unclear to identify a language."
+  }
+}

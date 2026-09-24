@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Self
 
 from .assets import check_platform, file_sha256, model_config, runtime_path, workspace_root
+from .audio import AUDIO_SAMPLE_RATE, MAX_AUDIO_BYTES, MAX_AUDIO_SECONDS, wav_info
 from .request import render_prompt
 
 IMAGE_TOKEN_BUDGETS = (70, 140, 280, 560, 1120)
@@ -39,6 +40,7 @@ class GemmaJev:
         context_size: int = 4096,
         vision: bool = False,
         image_tokens: int = 70,
+        audio: bool = False,
     ) -> None:
         if model not in ("e4b", "12b"):
             raise ValueError("model must be e4b or 12b")
@@ -52,10 +54,14 @@ class GemmaJev:
             raise ValueError("context_size must be a multiple of 256 from 512 to 4096")
         if not isinstance(vision, bool):
             raise ValueError("vision must be a boolean")  # noqa: TRY004
+        if not isinstance(audio, bool):
+            raise ValueError("audio must be a boolean")  # noqa: TRY004
         if type(image_tokens) is not int or image_tokens not in IMAGE_TOKEN_BUDGETS:
             raise ValueError("image_tokens must be 70, 140, 280, 560 or 1120")
         self._model = model
         self.vision = vision
+        self.audio = audio
+        self._multimodal = vision or audio
         self.image_tokens = image_tokens
         self.workspace = workspace_root(workspace)
         self.timeout = float(timeout)
@@ -93,18 +99,18 @@ class GemmaJev:
             config = model_config(self.model, self.workspace)
             binary = (
                 runtime_path(self.workspace, vision=True)
-                if self.vision else runtime_path(self.workspace)
+                if self._multimodal else runtime_path(self.workspace)
             )
             weights = Path(config["model_path"])
             if not binary.is_file() or not weights.is_file():
                 raise FileNotFoundError(
                     f"Model or runtime missing. Run `uv run gemmajev setup --model {self.model}"
-                    f"{' --vision' if self.vision else ''}` "
+                    f"{' --vision' if self._multimodal else ''}` "
                     f"in workspace {self.workspace}."
                 )
             if weights.stat().st_size != config["model_size"]:
                 raise ValueError(f"Model file has an unexpected size; run setup again: {weights}")
-            projector = Path(config["mmproj_path"]) if self.vision else None
+            projector = Path(config["mmproj_path"]) if self._multimodal else None
             if projector is not None:
                 if not projector.is_file():
                     raise FileNotFoundError(
@@ -176,11 +182,13 @@ class GemmaJev:
                     raise RuntimeError("Native worker did not initialize the requested model")
                 if ready.get("context_size") != self.context_size:
                     raise RuntimeError("Native worker context differs from the requested size")
-                if self.vision and (
+                if self._multimodal and (
                     ready.get("input_modality") != "image"
                     or ready.get("image_token_budget") != self.image_tokens
                 ):
                     raise RuntimeError("Native worker vision configuration differs from the request")
+                if self.audio and ready.get("audio_supported") is not True:
+                    raise RuntimeError("Native worker lacks audio support; rebuild with --vision")
                 self._ready, self._config = ready, config
             except BaseException:
                 self.close()
@@ -192,12 +200,14 @@ class GemmaJev:
         request: Mapping[str, object],
         *,
         image_path: str | Path | None = None,
+        audio_path: str | Path | None = None,
         reset_cache: bool = False,
     ) -> dict[str, float]:
-        """Score options, optionally conditioning on one image in vision mode.
+        """Score options, optionally conditioning on one image or audio attachment.
 
-        The four request fields and semantic output IDs are unchanged. Image
-        input is limited to a regular image file of at most 20 MiB. Set
+        The four request fields and semantic output IDs are unchanged. Attachments
+        are regular files of at most 20 MiB. Audio must be PCM16 mono 16 kHz WAV,
+        from 40 ms to 30 s, and requires ``audio=True``. Set
         ``reset_cache=True`` to compare a full prefill with prefix reuse.
         """
         with self._mutex:
@@ -207,7 +217,10 @@ class GemmaJev:
             # Invalid caller input never loads a model or mutates its cache.
             prompt, labels = render_prompt(request)
             self.last_usage = {}
+            if image_path is not None and audio_path is not None:
+                raise ValueError("Provide one attachment: image_path or audio_path, not both")
             image, image_sha256 = self._image_input(image_path)
+            audio, audio_sha256, audio_info = self._audio_input(audio_path)
             self.load()
             started = time.perf_counter()
             try:
@@ -215,6 +228,8 @@ class GemmaJev:
                 payload = {"prompt": prompt, "labels": list(labels)}
                 if image is not None:
                     payload["image_path"] = str(image)
+                if audio is not None:
+                    payload["audio_path"] = str(audio)
                 if reset_cache:
                     payload["reset_cache"] = True
                 self._process.stdin.write(json.dumps(payload) + "\n")
@@ -224,7 +239,10 @@ class GemmaJev:
                 cache, timings = response["kv_cache"], response["timings_ms"]
                 if reset_cache and cache["reused_tokens"] != 0:
                     raise RuntimeError("Native worker reused tokens despite reset_cache=True")
-                image_usage = self._image_usage(response, image is not None)
+                media_usage = self._media_usage(
+                    response, "audio" if audio is not None else "image" if image is not None else "text",
+                    audio_info,
+                )
                 self.last_usage = {
                     "model": self.model,
                     "model_sha256": self._config["model_sha256"],
@@ -241,10 +259,11 @@ class GemmaJev:
                     "runtime_patches": self._ready["runtime_patches"],
                     "batch_size": self._ready["batch_size"],
                     "microbatch_size": self._ready["microbatch_size"],
-                    **image_usage,
+                    **media_usage,
                     "image_sha256": image_sha256,
-                    "mmproj_sha256": self._config["mmproj_sha256"] if self.vision else None,
-                    "image_token_budget": self.image_tokens if self.vision else None,
+                    "audio_sha256": audio_sha256,
+                    "mmproj_sha256": self._config["mmproj_sha256"] if self._multimodal else None,
+                    "image_token_budget": self.image_tokens if self._multimodal else None,
                     "image_size": response.get("image_size"),
                     "image_resize_mode": response.get("image_resize_mode"),
                     "image_resize_interpolation": response.get("image_resize_interpolation"),
@@ -287,46 +306,96 @@ class GemmaJev:
             raise ValueError("image_path must contain a PNG, JPEG, GIF, BMP, PGM or PPM image")
         return path, hashlib.sha256(data).hexdigest()
 
-    def _image_usage(self, response: dict, has_image: bool) -> dict:
-        modality = "image" if has_image else "text"
+    def _audio_input(self, value: str | Path | None) -> tuple[Path | None, str | None, dict | None]:
+        if value is None:
+            return None, None, None
+        if not self.audio:
+            raise ValueError("audio_path requires GemmaJev(audio=True)")
+        if not isinstance(value, (str, Path)):
+            raise ValueError("audio_path must be a filesystem path")  # noqa: TRY004
+        raw = str(value)
+        if not raw or "\0" in raw:
+            raise ValueError("audio_path must be a nonempty path without NUL bytes")
+        try:
+            raw.encode("utf-8", errors="strict")
+        except UnicodeEncodeError as error:
+            raise ValueError("audio_path must contain valid UTF-8 text") from error
+        path = Path(raw).expanduser().resolve()
+        if not path.is_file():
+            raise ValueError(f"audio_path must name an existing regular WAV file: {path}")
+        if not 0 < path.stat().st_size <= MAX_AUDIO_BYTES:
+            raise ValueError("audio_path must contain a WAV file of at most 20 MiB")
+        with path.open("rb") as stream:
+            data = stream.read(MAX_AUDIO_BYTES + 1)
+        info = wav_info(data)
+        return path, hashlib.sha256(data).hexdigest(), info
+
+    def _media_usage(self, response: dict, modality: str, audio_info: dict | None = None) -> dict:
         image_tokens = response.get("image_tokens", 0)
+        audio_tokens = response.get("audio_tokens", 0)
         image_position = response.get("image_position")
+        audio_position = response.get("audio_position")
+        has_media = modality != "text"
         cacheable_prefix = response.get(
-            "cacheable_prefix_tokens", None if has_image else response["prompt_tokens"]
+            "cacheable_prefix_tokens", None if has_media else response["prompt_tokens"]
         )
         timings = response["timings_ms"]
         vision_ms = timings.get("vision_encode", 0.0)
+        audio_ms = timings.get("audio_encode", 0.0)
         prefill_ms = timings.get("prefill", 0.0)
-        if self.vision and response.get("input_modality") != modality:
+        if self._multimodal and response.get("input_modality") != modality:
             raise RuntimeError("Native worker returned an unexpected input modality")
         if type(image_tokens) is not int or image_tokens < 0:
             raise RuntimeError("Native worker returned invalid image token accounting")
+        if type(audio_tokens) is not int or audio_tokens < 0:
+            raise RuntimeError("Native worker returned invalid audio token accounting")
         if type(cacheable_prefix) is not int or cacheable_prefix < 0:
             raise RuntimeError("Native worker returned invalid cacheable prefix metadata")
-        if has_image:
+        if modality == "image":
+            if not 0 < image_tokens <= self.image_tokens or image_position != "after_text":
+                raise RuntimeError("Native worker returned invalid image prefix/cache accounting")
+        elif image_tokens or image_position is not None:
+            raise RuntimeError("Native worker returned image tokens for a non-image request")
+        if modality == "audio":
+            duration = response.get("audio_duration_seconds")
+            rate = response.get("audio_sample_rate")
             if (
-                not 0 < image_tokens <= self.image_tokens
-                or image_position != "after_text"
-                or cacheable_prefix + image_tokens >= response["prompt_tokens"]
+                not 0 < audio_tokens <= MAX_AUDIO_SECONDS * 25 + 2
+                or audio_position != "after_text"
+                or isinstance(duration, bool) or not isinstance(duration, (int, float))
+                or not math.isfinite(duration) or not 0 < duration <= MAX_AUDIO_SECONDS
+                or type(rate) is not int or rate != AUDIO_SAMPLE_RATE
+                or audio_info is None
+                or not math.isclose(duration, audio_info["duration_seconds"], abs_tol=1e-6)
+            ):
+                raise RuntimeError("Native worker returned invalid audio metadata")
+        elif audio_tokens or audio_position is not None:
+            raise RuntimeError("Native worker returned audio tokens for a non-audio request")
+        if has_media:
+            if (
+                cacheable_prefix + image_tokens + audio_tokens >= response["prompt_tokens"]
                 or response["kv_cache"]["reused_tokens"] > cacheable_prefix
             ):
-                raise RuntimeError("Native worker returned invalid image prefix/cache accounting")
-        elif image_tokens != 0:
-            raise RuntimeError("Native worker returned image tokens for a text request")
-        elif image_position is not None or cacheable_prefix != response["prompt_tokens"]:
+                raise RuntimeError("Native worker returned invalid media prefix/cache accounting")
+        elif cacheable_prefix != response["prompt_tokens"]:
             raise RuntimeError("Native worker returned invalid text prefix metadata")
         if any(
             isinstance(value, bool) or not isinstance(value, (int, float))
             or not math.isfinite(value) or value < 0
-            for value in (vision_ms, prefill_ms)
+            for value in (vision_ms, audio_ms, prefill_ms)
         ):
-            raise RuntimeError("Native worker returned invalid vision/prefill timings")
+            raise RuntimeError("Native worker returned invalid media/prefill timings")
         return {
             "input_modality": modality,
             "image_tokens": image_tokens,
             "image_position": image_position,
+            "audio_tokens": audio_tokens,
+            "audio_position": audio_position,
+            "audio_duration_seconds": response.get("audio_duration_seconds"),
+            "audio_sample_rate": response.get("audio_sample_rate"),
             "cacheable_prefix_tokens": cacheable_prefix,
             "vision_encode_ms": vision_ms,
+            "audio_encode_ms": audio_ms,
             "prefill_ms": prefill_ms,
         }
 

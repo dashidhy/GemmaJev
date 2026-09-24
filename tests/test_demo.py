@@ -2,10 +2,13 @@
 
 import hashlib
 import http.client
+import io
 import json
 import socket
 import struct
+import subprocess
 import threading
+import wave
 import webbrowser
 import zlib
 from concurrent.futures import ThreadPoolExecutor
@@ -35,6 +38,7 @@ class FakeEngine:
         self.calls = 0
         self.load_calls = 0
         self.decisions = []
+        self.audio_decisions = []
         self.instances.append(self)
 
     def load(self):
@@ -43,16 +47,43 @@ class FakeEngine:
         assert not self.closed
         self.loaded = True
 
-    def decide(self, request, *, image_path=None):
+    def decide(self, request, *, image_path=None, audio_path=None):
         assert self.loaded and not self.closed
+        assert image_path is None or audio_path is None
         self.calls += 1
         self.decisions.append((request, image_path))
+        self.audio_decisions.append((request, audio_path))
         ids = list(request["options"])
         return {key: (0.8 if index == 0 else 0.2 / (len(ids) - 1)) for index, key in enumerate(ids)}
 
     def close(self):
         self.closed = True
         self.loaded = False
+
+
+@pytest.fixture
+def local_audio_samples(tmp_path):
+    records = []
+    for index in (1, 2):
+        data = wav_audio(value=index * 100)
+        path = tmp_path / f"private-source-language-{index}.wav"
+        path.write_bytes(data)
+        records.append({
+            "id": f"sample_{index:02d}", "title": f"Local voice {index}", "path": path,
+            "sha256": hashlib.sha256(data).hexdigest(), "duration_seconds": 0.05,
+        })
+    return records
+
+
+@pytest.fixture(autouse=True)
+def no_real_audio_synthesis(monkeypatch):
+    from gemmajev import audio_samples, demo
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Demo tests must never synthesize system voices")
+
+    monkeypatch.setattr(audio_samples, "generate", unexpected)
+    monkeypatch.setattr(demo, "prepare_samples", lambda workspace: [], raising=False)
 
 
 @pytest.fixture
@@ -67,8 +98,10 @@ def manager(tmp_path):
 def server_factory(manager):
     running = []
 
-    def start():
-        value = create_server(port=0, manager=manager, workspace=manager.workspace)
+    def start(*, audio_samples=()):
+        value = create_server(
+            port=0, manager=manager, workspace=manager.workspace, audio_samples=audio_samples,
+        )
         value.server_activate()
         thread = threading.Thread(target=value.serve_forever, kwargs={"poll_interval": 0.02})
         thread.start()
@@ -102,7 +135,7 @@ def exchange(server, method="GET", path="/api/config", *, payload=None, body=Non
         response = connection.getresponse()
         content = response.read()
         response_headers = dict(response.getheaders())
-        if response.getheader("Content-Type", "").startswith("application/json"):
+        if method != "HEAD" and response.getheader("Content-Type", "").startswith("application/json"):
             content = json.loads(content)
         return response.status, response_headers, content
     finally:
@@ -136,11 +169,26 @@ def upload(server, image, *, headers=None):
     )
 
 
+def wav_audio(frames=800, *, value=1000, channels=1, rate=16000):
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as stream:
+        stream.setparams((channels, 2, rate, 0, "NONE", "not compressed"))
+        stream.writeframes(value.to_bytes(2, "little", signed=True) * frames * channels)
+    return buffer.getvalue()
+
+
+def upload_audio(server, data, *, headers=None):
+    return exchange(
+        server, "POST", "/api/audio", body=data,
+        headers={"Content-Type": "audio/wav", **(headers or {})},
+    )
+
+
 def test_packaged_examples_have_semantic_ids_and_self_consistent_terms():
     for name in EXAMPLES:
         request = load_example(name)
         assert set(request) == {"task", "state", "query", "options"}
-        assert len(request["options"]) == (4 if name == "image_style" else 3)
+        assert len(request["options"]) == {"image_style": 4, "audio_language": 6}.get(name, 3)
         assert all(len(option_id) > 1 for option_id in request["options"])
     evidence = load_example("evidence_check")
     assert evidence["state"].startswith("Evidence:")
@@ -150,6 +198,10 @@ def test_packaged_examples_have_semantic_ids_and_self_consistent_terms():
     assert "image" in image["task"].lower()
     assert "image" in image["state"].lower()
     assert "style" in image["query"].lower()
+    audio = load_example("audio_language")
+    assert "audio" in audio["task"].lower() and "audio" in audio["state"].lower()
+    assert "language" in audio["query"].lower()
+    assert list(audio["options"]) == ["english", "japanese", "spanish", "french", "other", "unclear"]
 
 
 def test_demo_uses_smaller_context_without_changing_injected_factory(monkeypatch):
@@ -161,6 +213,7 @@ def test_demo_uses_smaller_context_without_changing_injected_factory(monkeypatch
         "workspace": None,
         "context_size": 2048,
         "vision": True,
+        "audio": True,
     }
 
 
@@ -295,8 +348,9 @@ def test_launch_loads_before_listening_and_opening_browser(monkeypatch, open_bro
     events = []
     server = fake_launch_server(events)
 
-    def build_server(model, workspace, port):
+    def build_server(model, workspace, port, *, audio_samples=()):
         assert model == "e4b" and workspace == "/test/workspace" and port == 7862
+        assert list(audio_samples) == []
         events.append("bind")
         return server
 
@@ -334,10 +388,13 @@ def test_config_exposes_examples_without_inference(server):
     assert status == 200 and config["model"] == "12b"
     assert config["examples"] == [
         {"id": name, "title": title, "request": load_example(name),
-         **({"image_id": "sample_1"} if name == "image_style" else {})}
+         "modality": {"image_style": "image", "audio_language": "audio"}.get(name, "text"),
+         **({"image_id": "sample_1"} if name == "image_style" else {}),
+         **({"audio_id": None} if name == "audio_language" else {})}
         for name, title in EXAMPLES.items()
     ]
     assert len(config["image_samples"]) == 4
+    assert config["audio_samples"] == []
     for index, sample in enumerate(config["image_samples"], start=1):
         assert sample["id"] == f"sample_{index}" and sample["title"]
         assert sample["url"] == f"/api/images/sample_{index}"
@@ -369,6 +426,7 @@ def test_decision_uses_preloaded_model_preserves_option_order_and_switches(serve
     assert list(result["probabilities"]) == list(payload["request"]["options"])
     assert result["model"] == "12b" and result["load_ms"] == 0 and result["request_ms"] >= 0
     assert result["image_id"] is None
+    assert result["audio_id"] is None
     assert sum(result["probabilities"].values()) == pytest.approx(1)
     first = FakeEngine.instances[0]
     assert first.load_calls == 1 and first.calls == 1
@@ -801,3 +859,391 @@ def test_uploaded_image_files_are_removed_when_server_closes(manager, tmp_path):
         value.server_close()
         thread.join(timeout=3)
     assert not thread.is_alive() and not path.exists()
+
+
+def test_launch_prepares_audio_before_binding_and_loading(monkeypatch, local_audio_samples):
+    from gemmajev import demo
+
+    events = []
+    server = fake_launch_server(events)
+
+    def prepare(workspace):
+        events.append("prepare-audio")
+        return local_audio_samples
+
+    def build(*args, audio_samples):
+        events.append("bind")
+        assert audio_samples == local_audio_samples
+        return server
+
+    monkeypatch.setattr(demo, "prepare_samples", prepare)
+    monkeypatch.setattr(demo, "create_server", build)
+    demo.launch(open_browser=False)
+    assert events == ["prepare-audio", "bind", ("load", "12b"), "listen", "serve",
+                      "server-close", "engine-close"]
+
+
+@pytest.mark.parametrize("error", [
+    RuntimeError("A system voice is unavailable"), subprocess.CalledProcessError(1, ["say"]),
+    subprocess.TimeoutExpired(["say"], 60),
+])
+def test_launch_audio_generation_failure_preserves_upload_only_playground(monkeypatch, capsys, error):
+    from gemmajev import demo
+
+    events = []
+    server = fake_launch_server(events)
+
+    def unavailable(workspace):
+        raise error
+
+    def build(*args, audio_samples):
+        assert audio_samples == []
+        return server
+
+    monkeypatch.setattr(demo, "prepare_samples", unavailable)
+    monkeypatch.setattr(demo, "create_server", build)
+    demo.launch(open_browser=False)
+    assert ("load", "12b") in events and "listen" in events
+    output = capsys.readouterr().out
+    assert str(error) in output and "upload" in output.lower()
+
+
+def test_audio_samples_config_and_playback_reveal_no_filesystem_paths(
+    server_factory, local_audio_samples,
+):
+    server = server_factory(audio_samples=local_audio_samples)
+    status, _, config = exchange(server)
+    assert status == 200
+    assert config["audio_samples"] == [
+        {"id": row["id"], "title": row["title"], "url": f"/api/audio/{row['id']}",
+         "duration_seconds": row["duration_seconds"]}
+        for row in local_audio_samples
+    ]
+    audio_example = next(row for row in config["examples"] if row["id"] == "audio_language")
+    assert audio_example["modality"] == "audio"
+    assert audio_example["audio_id"] == local_audio_samples[0]["id"]
+    for sample in local_audio_samples:
+        status, headers, content = exchange(server, path=f"/api/audio/{sample['id']}")
+        assert status == 200 and headers["Content-Type"].startswith("audio/wav")
+        assert content == sample["path"].read_bytes()
+        assert str(sample["path"]) not in json.dumps(config)
+    assert FakeEngine.instances == []
+
+
+def test_audio_manager_reuses_engine_without_adding_filename_to_request(manager, tmp_path):
+    request = load_example("audio_language")
+    path = tmp_path / "secret-spanish.wav"
+    path.write_bytes(wav_audio())
+    manager.load("12b")
+    result = manager.run("12b", request, audio_path=path)
+    engine = FakeEngine.instances[0]
+    assert engine.audio_decisions == [(request, path)]
+    assert engine.calls == 1 and engine.load_calls == 1 and result["load_ms"] == 0
+    assert result["request"] == request and str(path) not in json.dumps(result)
+    manager.run("12b", request)
+    assert engine.audio_decisions[-1] == (request, None) and engine.load_calls == 1
+
+
+def test_manager_rejects_combined_attachments_before_loading(manager, tmp_path):
+    with pytest.raises(ValueError):
+        manager.run("12b", load_example("audio_language"),
+                    audio_path=tmp_path / "audio.wav", image_path=tmp_path / "image.png")
+    assert FakeEngine.instances == []
+
+
+def test_audio_upload_roundtrip_deduplication_and_metadata_without_inference(server):
+    data = wav_audio()
+    digest = hashlib.sha256(data).hexdigest()
+    status, _, uploaded = upload_audio(server, data)
+    assert status == 200 and uploaded == {
+        "audio_id": digest, "url": f"/api/audio/{digest}",
+        "duration_seconds": 0.05, "sample_rate": 16000, "channels": 1,
+    }
+    assert upload_audio(server, data)[2] == uploaded
+    status, headers, content = exchange(server, path=uploaded["url"])
+    assert status == 200 and content == data
+    assert headers["Content-Type"].startswith("audio/wav")
+    assert FakeEngine.instances == []
+
+
+def test_audio_decision_uses_registered_path_and_preserves_only_public_request(
+    server_factory, local_audio_samples,
+):
+    server = server_factory(audio_samples=local_audio_samples)
+    request = load_example("audio_language")
+    sample = local_audio_samples[0]
+    status, _, result = exchange(server, "POST", "/api/decide", payload={
+        "model": "12b", "request": request, "audio_id": sample["id"],
+    })
+    assert status == 200 and result["audio_id"] == sample["id"] and result["image_id"] is None
+    received, path = FakeEngine.instances[0].audio_decisions[-1]
+    assert received == request and result["request"] == request
+    assert isinstance(path, Path) and path.read_bytes() == sample["path"].read_bytes()
+    assert path != sample["path"]  # Session copy freezes the bytes seen by the engine.
+    assert sample["id"] not in json.dumps(received)
+    assert str(sample["path"]) not in json.dumps(result) and str(path) not in json.dumps(result)
+
+
+def test_uploaded_audio_has_no_original_filename_and_no_image_carryover(server):
+    data = wav_audio()
+    status, _, uploaded = upload_audio(server, data, headers={
+        "Content-Disposition": 'attachment; filename="answer-is-mandarin.wav"',
+    })
+    assert status == 200
+    request = load_example("audio_language")
+    status, _, result = exchange(server, "POST", "/api/decide", payload={
+        "model": "12b", "request": request, "audio_id": uploaded["audio_id"],
+    })
+    assert status == 200 and result["image_id"] is None
+    engine = FakeEngine.instances[0]
+    received, path = engine.audio_decisions[-1]
+    assert received == request and isinstance(path, Path) and path.read_bytes() == data
+    assert "answer-is-mandarin" not in str(path) and path.stem == uploaded["audio_id"]
+    assert engine.decisions[-1] == (request, None)
+    status, _, result = exchange(server, "POST", "/api/decide", payload=decision_payload())
+    assert status == 200 and result["audio_id"] is None and result["image_id"] is None
+    assert engine.audio_decisions[-1][1] is None and engine.calls == 2
+
+
+@pytest.mark.parametrize("audio_id", ["unknown", "a" * 64, "../secret.wav", "/etc/passwd", 1, [], {}])
+def test_invalid_audio_ids_never_reach_the_engine(server, audio_id):
+    status, _, content = exchange(server, "POST", "/api/decide", payload={
+        **decision_payload(), "audio_id": audio_id,
+    })
+    assert status == 400 and content["error"]
+    assert FakeEngine.instances == []
+
+
+def test_http_rejects_simultaneous_audio_and_image_attachments(server):
+    audio_id = upload_audio(server, wav_audio())[2]["audio_id"]
+    status, _, content = exchange(server, "POST", "/api/decide", payload={
+        **decision_payload(), "audio_id": audio_id, "image_id": "sample_1",
+    })
+    assert status == 400 and content["error"] and FakeEngine.instances == []
+
+
+@pytest.mark.parametrize("path", ["/api/audio/unknown", "/api/audio/../secret.wav",
+                                  "/api/audio/%2e%2e%2fsecret.wav", "/api/audio/" + "a" * 64])
+def test_unknown_audio_routes_are_not_served(server, path):
+    assert exchange(server, path=path)[0] == 404
+    assert FakeEngine.instances == []
+
+
+@pytest.mark.parametrize("data", [
+    b"not WAV", wav_audio()[:-1], wav_audio(frames=1), wav_audio(frames=639),
+    wav_audio(channels=2), wav_audio(rate=44100), wav_audio(frames=30 * 16000 + 1),
+])
+def test_malformed_noncanonical_or_out_of_range_audio_rejected_before_inference(server, data):
+    status, _, content = upload_audio(server, data)
+    assert status in {400, 413} and content["error"] and FakeEngine.instances == []
+
+
+def test_audio_wrong_mime_or_oversized_body_rejected_without_loading(server, monkeypatch):
+    from gemmajev import demo
+
+    for mime in ("audio/mpeg", "application/json", "text/plain"):
+        status, _, content = upload_audio(server, wav_audio(), headers={"Content-Type": mime})
+        assert status == 415 and content["error"]
+    monkeypatch.setattr(demo, "MAX_AUDIO_BYTES", 128)
+    status, _, content = upload_audio(server, b"x" * 129)
+    assert status == 413 and content["error"] and FakeEngine.instances == []
+
+
+def test_audio_quota_deduplication_preserves_existing_samples(server_factory, monkeypatch):
+    from gemmajev import demo
+
+    first, second = wav_audio(value=100), wav_audio(value=200)
+    original = demo.AudioStore
+
+    def limited(*args, **kwargs):
+        kwargs["max_bytes"] = len(first) + len(second) - 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(demo, "AudioStore", limited)
+    server = server_factory()
+    status, _, uploaded = upload_audio(server, first)
+    assert status == 200 and upload_audio(server, first)[0] == 200
+    status, _, content = upload_audio(server, second)
+    assert status == 413 and content["error"]
+    assert exchange(server, path=uploaded["url"])[2] == first and FakeEngine.instances == []
+
+
+def test_audio_obeys_local_host_origin_and_fetch_site_restrictions(server):
+    for headers in [
+        {"Host": "attacker.invalid"}, {"Origin": "https://attacker.invalid"},
+        {"Sec-Fetch-Site": "cross-site"},
+    ]:
+        assert upload_audio(server, wav_audio(), headers=headers)[0] == 403
+        assert exchange(server, path="/api/audio/sample_01", headers=headers)[0] == 403
+    assert FakeEngine.instances == []
+
+
+@pytest.mark.parametrize("upload_first", [False, True])
+def test_audio_sample_and_upload_aliases_never_rewrite_registered_bytes(
+    tmp_path, local_audio_samples, monkeypatch, upload_first,
+):
+    from gemmajev.demo_audio import AudioStore
+
+    sample = local_audio_samples[0]
+    data = sample["path"].read_bytes()
+    store = AudioStore(tmp_path, samples=local_audio_samples)
+    try:
+        if upload_first:
+            store.add(data)
+            path = store.resolve(sample["sha256"])
+        else:
+            path = store.resolve(sample["id"])
+        write_bytes = Path.write_bytes
+
+        def protected(target, content):
+            assert target != path, "Registered audio bytes must remain immutable"
+            return write_bytes(target, content)
+
+        monkeypatch.setattr(Path, "write_bytes", protected)
+        assert store.add(data)["audio_id"] == sample["sha256"]
+        assert store.resolve(sample["sha256"]) == store.resolve(sample["id"]) == path
+        assert path.read_bytes() == data
+    finally:
+        store.close()
+
+
+def test_audio_files_cleaned_after_server_close_but_source_samples_preserved(
+    manager, tmp_path, local_audio_samples,
+):
+    value = create_server(
+        port=0, manager=manager, workspace=tmp_path, audio_samples=local_audio_samples,
+    )
+    value.server_activate()
+    thread = threading.Thread(target=value.serve_forever, kwargs={"poll_interval": 0.02})
+    thread.start()
+    try:
+        status, _, uploaded = upload_audio(value, wav_audio())
+        assert status == 200
+        status, _, _ = exchange(value, "POST", "/api/decide", payload={
+            **decision_payload(), "audio_id": uploaded["audio_id"],
+        })
+        assert status == 200
+        cached_audio = FakeEngine.instances[0].audio_decisions[-1][1]
+        assert cached_audio.is_file()
+    finally:
+        value.shutdown()
+        value.server_close()
+        thread.join(timeout=3)
+    assert not thread.is_alive() and not cached_audio.exists()
+    assert all(sample["path"].is_file() for sample in local_audio_samples)
+
+
+def test_server_waits_for_audio_inference_before_deleting_attachment(manager, tmp_path):
+    value = create_server(port=0, manager=manager, workspace=tmp_path)
+    value.server_activate()
+    thread = threading.Thread(target=value.serve_forever, kwargs={"poll_interval": 0.02})
+    thread.start()
+    entered, release, closed = threading.Event(), threading.Event(), threading.Event()
+    manager.load("12b")
+    engine = FakeEngine.instances[0]
+    original = engine.decide
+    attachment = []
+
+    def blocking(request, *, audio_path):
+        attachment.append(audio_path)
+        assert audio_path.is_file()
+        entered.set()
+        assert release.wait(timeout=5)
+        assert audio_path.is_file(), "Server cleanup must wait until inference finishes"
+        return original(request, audio_path=audio_path)
+
+    def close_server():
+        value.server_close()
+        closed.set()
+
+    engine.decide = blocking
+    try:
+        audio_id = upload_audio(value, wav_audio())[2]["audio_id"]
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            running = pool.submit(exchange, value, "POST", "/api/decide", payload={
+                **decision_payload(), "audio_id": audio_id,
+            })
+            try:
+                assert entered.wait(timeout=3)
+                value.shutdown()
+                closing = pool.submit(close_server)
+                assert not closed.wait(timeout=0.05)
+                assert attachment[0].is_file()
+            finally:
+                release.set()
+            assert running.result(timeout=3)[0] == 200
+            closing.result(timeout=3)
+        assert closed.is_set() and not attachment[0].exists()
+    finally:
+        release.set()
+        value.shutdown()
+        value.server_close()
+        thread.join(timeout=3)
+    assert not thread.is_alive()
+
+
+@pytest.fixture(params=["sample", "upload"])
+def audio_resource(request, server_factory, local_audio_samples):
+    server = server_factory(audio_samples=local_audio_samples)
+    if request.param == "sample":
+        sample = local_audio_samples[0]
+        return server, f"/api/audio/{sample['id']}", sample["path"].read_bytes()
+    data = wav_audio(value=777)
+    status, _, uploaded = upload_audio(server, data)
+    assert status == 200
+    return server, uploaded["url"], data
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+def test_full_audio_response_advertises_byte_ranges(audio_resource, method):
+    server, url, data = audio_resource
+    status, headers, content = exchange(server, method, url)
+    assert status == 200 and headers["Accept-Ranges"] == "bytes"
+    assert headers["Content-Length"] == str(len(data))
+    assert headers["Content-Type"].startswith("audio/wav")
+    assert "Content-Range" not in headers
+    assert content == (data if method == "GET" else b"")
+    assert FakeEngine.instances == []
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+def test_audio_byte_ranges_are_inclusive_and_clamped(audio_resource, method):
+    server, url, data = audio_resource
+    total = len(data)
+    for range_header, start, end in [
+        ("bytes=0-0", 0, 0), ("bytes=4-15", 4, 15),
+        ("bytes=44-", 44, total - 1), ("bytes=-19", total - 19, total - 1),
+        ("bytes=7-999999", 7, total - 1), ("bytes=-999999", 0, total - 1),
+        ("bytes=0-", 0, total - 1),
+    ]:
+        status, headers, content = exchange(server, method, url, headers={"Range": range_header})
+        assert status == 206, range_header
+        assert headers["Accept-Ranges"] == "bytes"
+        assert headers["Content-Range"] == f"bytes {start}-{end}/{total}"
+        assert headers["Content-Length"] == str(end - start + 1)
+        assert headers["Content-Type"].startswith("audio/wav")
+        assert content == (data[start:end + 1] if method == "GET" else b"")
+    assert FakeEngine.instances == []
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+def test_invalid_or_multiple_audio_ranges_report_unsatisfied_total(audio_resource, method):
+    server, url, data = audio_resource
+    for range_header in [
+        f"bytes={len(data)}-", "bytes=999999-", "bytes=15-4", "bytes=-0", "bytes=-",
+        "items=0-10", "bytes=abc-def", "bytes=0-1,4-5", "bytes=--1", "bytes=0",
+    ]:
+        status, headers, content = exchange(server, method, url, headers={"Range": range_header})
+        assert status == 416, range_header
+        assert headers["Content-Range"] == f"bytes */{len(data)}"
+        if method == "HEAD":
+            assert content == b""
+    assert FakeEngine.instances == []
+
+
+def test_audio_range_requests_preserve_origin_restrictions(audio_resource):
+    server, url, _ = audio_resource
+    status, _, _ = exchange(server, path=url, headers={
+        "Range": "bytes=0-15", "Origin": "https://attacker.invalid",
+    })
+    assert status == 403 and FakeEngine.instances == []

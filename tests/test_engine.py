@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import math
 import sys
+import wave
 
 import pytest
 
 import gemmajev.engine as module
 from gemmajev.engine import GemmaJev
+from gemmajev.request import render_prompt
 
 REQUEST = {
     "task": "Classify the message.",
@@ -45,7 +47,7 @@ def fake_worker(tmp_path, monkeypatch):
         binary.write_text(
             f"#!{sys.executable}\n"
             + """
-import json, math, sys, time
+import json, math, sys, time, wave
 from pathlib import Path
 MODE = """
             + repr(mode)
@@ -58,11 +60,14 @@ budget = int(sys.argv[sys.argv.index('--image-tokens') + 1]) if vision else None
 if MODE == 'startup_error':
     emit({'ready': False, 'error': 'load failed'})
     sys.exit(1)
-emit({'ready': True, 'model_size': size, 'context_size': 4096, 'load_ms': 2,
+ready = {'ready': True, 'model_size': size, 'context_size': 4096, 'load_ms': 2,
       'runtime_revision': 'pinned', 'worker_source_sha256': 'a' * 64,
       'runtime_patches': [], 'batch_size': 512, 'microbatch_size': 128,
       'input_modality': 'image' if vision and MODE != 'wrong_vision_ready' else 'text',
-      'image_token_budget': budget if MODE != 'wrong_image_budget' else 140})
+      'image_token_budget': budget if MODE != 'wrong_image_budget' else 140,
+      'audio_supported': vision and MODE != 'audio_unsupported'}
+if MODE == 'missing_audio_support': ready.pop('audio_supported')
+emit(ready)
 for line in sys.stdin:
     request = json.loads(line)
     Path(__file__).with_suffix('.request.json').write_text(json.dumps(request))
@@ -92,31 +97,68 @@ for line in sys.stdin:
     if MODE == 'nonfinite':
         candidates[0]['logit'] = float('nan')
     has_image = 'image_path' in request
-    tokens = (74 if has_image else 10) if MODE != 'bad_counts' else 11
-    reused = 0 if has_image else 2
+    has_audio = 'audio_path' in request
+    if has_audio:
+        with wave.open(request['audio_path'], 'rb') as stream:
+            audio_rate = stream.getframerate()
+            audio_duration = stream.getnframes() / audio_rate
+    else:
+        audio_rate = audio_duration = None
+    audio_tokens = math.ceil(audio_duration * 25) if has_audio else 0
+    tokens = (74 if has_image else 10 + audio_tokens) if MODE != 'bad_counts' else 11
+    reused = 0 if has_image or has_audio else 2
     if MODE == 'image_prefix_cache' and has_image: reused = 8
+    if MODE == 'audio_prefix_cache' and has_audio: reused = 8
     if MODE == 'image_cache_beyond_prefix' and has_image: reused = 9
+    if MODE == 'audio_cache_beyond_prefix' and has_audio: reused = 9
     if request.get('reset_cache') and MODE != 'ignored_reset': reused = 0
     image_tokens = 64 if has_image and MODE != 'ignored_image' else 0
     if MODE == 'bad_image_tokens': image_tokens = -1
     result = {'ok': True, 'candidates': candidates, 'prompt_tokens': tokens,
-          'input_modality': 'image' if has_image and MODE != 'wrong_modality' else 'text',
+          'input_modality': ('audio' if has_audio else 'image' if has_image else 'text')
+                            if MODE != 'wrong_modality' else 'text',
           'image_tokens': image_tokens,
           'image_position': 'after_text' if has_image else None,
-          'cacheable_prefix_tokens': 8 if has_image else tokens,
+          'audio_tokens': audio_tokens, 'audio_position': 'after_text' if has_audio else None,
+          'audio_duration_seconds': audio_duration, 'audio_sample_rate': audio_rate,
+          'cacheable_prefix_tokens': 8 if has_image or has_audio else tokens,
           'kv_cache': {'enabled': True, 'reused_tokens': reused,
                        'evaluated_tokens': tokens - reused if MODE != 'bad_counts' else 8},
           'timings_ms': {'total': 1.5, 'prefill': 1.0,
-                         'vision_encode': float('nan') if MODE == 'bad_vision_timing' else 0.2}}
+                         'vision_encode': float('nan') if MODE == 'bad_vision_timing' else 0.2,
+                         'audio_encode': 0.3 if has_audio else 0.0}}
     if MODE == 'missing_image_position': result.pop('image_position')
     if MODE == 'missing_cacheable_prefix': result.pop('cacheable_prefix_tokens')
     if MODE == 'negative_cacheable_prefix': result['cacheable_prefix_tokens'] = -1
     if MODE == 'bool_cacheable_prefix': result['cacheable_prefix_tokens'] = True
     if MODE == 'oversized_cacheable_prefix': result['cacheable_prefix_tokens'] = 10
     if MODE == 'image_before_text': result['image_position'] = 'before_text'
+    audio_overrides = {
+        'ignored_audio': {'audio_tokens': 0},
+        'negative_audio_tokens': {'audio_tokens': -1},
+        'bool_audio_tokens': {'audio_tokens': True},
+        'too_many_audio_tokens': {'audio_tokens': 753},
+        'audio_before_text': {'audio_position': 'before_text'},
+        'wrong_audio_duration': {'audio_duration_seconds': audio_duration + 0.1 if has_audio else 0.1},
+        'nan_audio_duration': {'audio_duration_seconds': float('nan')},
+        'bool_audio_duration': {'audio_duration_seconds': True},
+        'wrong_audio_rate': {'audio_sample_rate': 44100},
+        'bool_audio_rate': {'audio_sample_rate': True},
+        'audio_in_text': {'audio_tokens': 1, 'audio_position': 'after_text'},
+        'image_in_audio': {'image_tokens': 1, 'image_position': 'after_text'},
+    }
+    result.update(audio_overrides.get(MODE, {}))
+    if MODE == 'missing_audio_position': result.pop('audio_position')
+    if MODE == 'missing_audio_duration': result.pop('audio_duration_seconds')
+    if MODE == 'missing_audio_rate': result.pop('audio_sample_rate')
+    if MODE == 'bad_audio_timing': result['timings_ms']['audio_encode'] = float('nan')
+    if MODE == 'negative_audio_timing': result['timings_ms']['audio_encode'] = -0.1
     if MODE == 'legacy_text':
         result.pop('image_position')
         result.pop('cacheable_prefix_tokens')
+        for key in ('audio_tokens', 'audio_position', 'audio_duration_seconds', 'audio_sample_rate'):
+            result.pop(key)
+        result['timings_ms'].pop('audio_encode')
     emit(result)
 """
         )
@@ -236,6 +278,8 @@ def test_missing_assets_dont_start_process(fake_worker, monkeypatch, tmp_path):
         {"context_size": 513},
         {"context_size": True},
         {"vision": "yes"},
+        {"audio": "yes"},
+        {"audio": 1},
         {"image_tokens": 0},
         {"image_tokens": 100},
         {"image_tokens": True},
@@ -447,3 +491,202 @@ def test_native_ignored_reset_destroys_worker(fake_worker):
             engine.decide(REQUEST, reset_cache=True)
         assert process.poll() is not None and not engine.loaded
         assert engine.last_usage == {} and engine._lock_file is None
+
+
+@pytest.fixture
+def audio_file(tmp_path):
+    path = tmp_path / "private-source-mandarin.wav"
+    with wave.open(str(path), "wb") as stream:
+        stream.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+        stream.writeframes(b"\x00\x10" * 16000)
+    return path
+
+
+AUDIO_REQUEST = {
+    "task": "Identify the language of the attached audio.",
+    "state": "An audio clip is attached.",
+    "query": "Which language is spoken?",
+    "options": {"english": "English speech", "mandarin": "Mandarin Chinese speech"},
+}
+
+
+def test_audio_uses_multimodal_worker_and_separate_path_without_prompt_leakage(
+    fake_worker, audio_file, monkeypatch,
+):
+    selected = []
+    original_path = module.runtime_path
+
+    def runtime(workspace, **kwargs):
+        selected.append(kwargs)
+        return original_path(workspace, **kwargs)
+
+    monkeypatch.setattr(module, "runtime_path", runtime)
+    with fake_worker(audio=True) as engine:
+        assert selected == [{"vision": True}]
+        assert "--mmproj" in engine._process.args
+        probabilities = engine.decide(AUDIO_REQUEST, audio_path=str(audio_file))
+        assert list(probabilities) == list(AUDIO_REQUEST["options"])
+        usage = engine.last_usage
+        assert usage["input_modality"] == "audio" and usage["audio_tokens"] == 25
+        assert usage["audio_position"] == "after_text"
+        assert usage["audio_duration_seconds"] == 1.0 and usage["audio_sample_rate"] == 16000
+        assert usage["audio_encode_ms"] == 0.3
+        assert usage["audio_sha256"] == hashlib.sha256(audio_file.read_bytes()).hexdigest()
+        assert usage["image_tokens"] == 0 and usage["image_position"] is None
+        assert usage["image_sha256"] is None
+        assert usage["mmproj_sha256"] == hashlib.sha256(b"fake projector").hexdigest()
+        assert audio_file.name not in module.json.dumps(usage)
+        payload = module.json.loads((audio_file.parent / "worker.request.json").read_text())
+        assert payload["audio_path"] == str(audio_file.resolve())
+        assert payload["prompt"] == render_prompt(AUDIO_REQUEST)[0]
+        assert audio_file.name not in payload["prompt"] and "image_path" not in payload
+
+
+def test_audio_then_text_then_image_reuses_worker_without_stale_attachment_metadata(
+    fake_worker, audio_file, image_file,
+):
+    with fake_worker(audio=True, vision=True) as engine:
+        process = engine._process
+        engine.decide(AUDIO_REQUEST, audio_path=audio_file)
+        assert engine.last_usage["audio_sha256"] is not None
+        for kwargs, modality in [({}, "text"), ({"image_path": image_file}, "image")]:
+            engine.decide(REQUEST, **kwargs)
+            assert engine._process is process
+            usage = engine.last_usage
+            assert usage["input_modality"] == modality
+            assert usage["audio_tokens"] == 0 and usage["audio_position"] is None
+            assert usage["audio_sha256"] is None and usage["audio_encode_ms"] == 0
+            assert usage["audio_duration_seconds"] is None and usage["audio_sample_rate"] is None
+            payload = module.json.loads((audio_file.parent / "worker.request.json").read_text())
+            assert "audio_path" not in payload
+        assert engine.last_usage["image_tokens"] == 64
+
+
+def test_audio_prefix_cache_reset_propagates_and_preserves_distribution(fake_worker, audio_file):
+    with fake_worker("audio_prefix_cache", audio=True) as engine:
+        first = engine.decide(AUDIO_REQUEST, audio_path=audio_file)
+        assert engine.last_usage["cached_tokens"] == 8
+        assert engine.last_usage["cacheable_prefix_tokens"] == 8
+        assert engine.decide(AUDIO_REQUEST, audio_path=audio_file, reset_cache=True) == first
+        assert engine.last_usage["cached_tokens"] == 0
+        payload = module.json.loads((audio_file.parent / "worker.request.json").read_text())
+        assert payload["reset_cache"] is True
+
+
+@pytest.mark.parametrize("options", [{}, {"vision": True}])
+def test_audio_without_explicit_enable_is_rejected_before_load(fake_worker, audio_file, options):
+    engine = fake_worker(**options)
+    try:
+        with pytest.raises(ValueError, match="audio=True"):
+            engine.decide(AUDIO_REQUEST, audio_path=audio_file)
+        assert not engine.loaded and engine._process is None
+    finally:
+        engine.close()
+
+
+def test_audio_enable_does_not_implicitly_enable_image_input(fake_worker, image_file):
+    engine = fake_worker(audio=True)
+    try:
+        with pytest.raises(ValueError, match="vision=True"):
+            engine.decide(REQUEST, image_path=image_file)
+        assert not engine.loaded and engine._process is None
+    finally:
+        engine.close()
+
+
+def test_both_attachment_types_are_rejected_before_loading(fake_worker, audio_file, image_file):
+    engine = fake_worker(audio=True, vision=True)
+    try:
+        with pytest.raises(ValueError, match="not both"):
+            engine.decide(AUDIO_REQUEST, audio_path=audio_file, image_path=image_file)
+        assert not engine.loaded and engine._process is None
+    finally:
+        engine.close()
+
+
+@pytest.mark.parametrize("kind", [
+    "missing", "directory", "empty", "text", "truncated", "nul", "surrogate", "nonpath",
+    "one_sample", "under_one_token",
+])
+def test_invalid_audio_is_rejected_before_model_loading(fake_worker, audio_file, tmp_path, kind):
+    engine = fake_worker(audio=True)
+    path = tmp_path / "input.wav"
+    if kind == "directory":
+        path.mkdir()
+    elif kind == "empty":
+        path.write_bytes(b"")
+    elif kind == "text":
+        path.write_text("This is not an audio file.")
+    elif kind == "truncated":
+        path.write_bytes(audio_file.read_bytes()[:-1])
+    elif kind == "nul":
+        path = "invalid\0.wav"
+    elif kind == "surrogate":
+        path = "invalid\ud800.wav"
+    elif kind == "nonpath":
+        path = 42
+    elif kind in {"one_sample", "under_one_token"}:
+        frames = 1 if kind == "one_sample" else 639
+        with wave.open(str(path), "wb") as stream:
+            stream.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+            stream.writeframes(b"\x00\x10" * frames)
+    try:
+        with pytest.raises(ValueError):
+            engine.decide(AUDIO_REQUEST, audio_path=path)
+        assert not engine.loaded and engine._process is None
+    finally:
+        engine.close()
+
+
+def test_oversized_audio_file_is_rejected_before_loading(fake_worker, audio_file, monkeypatch):
+    engine = fake_worker(audio=True)
+    monkeypatch.setattr(module, "MAX_AUDIO_BYTES", audio_file.stat().st_size - 1)
+    try:
+        with pytest.raises(ValueError, match="20 MiB"):
+            engine.decide(AUDIO_REQUEST, audio_path=audio_file)
+        assert not engine.loaded and engine._process is None
+    finally:
+        engine.close()
+
+
+def test_invalid_audio_does_not_destroy_an_already_loaded_worker(fake_worker, audio_file, tmp_path):
+    with fake_worker(audio=True) as engine:
+        process = engine._process
+        engine.decide(AUDIO_REQUEST, audio_path=audio_file)
+        with pytest.raises(ValueError):
+            engine.decide(AUDIO_REQUEST, audio_path=tmp_path / "missing.wav")
+        assert engine.loaded and engine._process is process
+        assert engine.decide(AUDIO_REQUEST, audio_path=audio_file)
+
+
+@pytest.mark.parametrize("mode", ["audio_unsupported", "missing_audio_support"])
+def test_audio_startup_requires_support_and_releases_worker_on_mismatch(fake_worker, mode):
+    engine = fake_worker(mode, audio=True)
+    with pytest.raises(RuntimeError, match="audio support"):
+        engine.load()
+    assert engine._process is None and not engine.loaded and engine._lock_file is None
+
+
+@pytest.mark.parametrize("mode", [
+    "wrong_modality", "ignored_audio", "negative_audio_tokens", "bool_audio_tokens",
+    "too_many_audio_tokens", "audio_before_text", "missing_audio_position",
+    "wrong_audio_duration", "nan_audio_duration", "bool_audio_duration", "missing_audio_duration",
+    "wrong_audio_rate", "bool_audio_rate", "missing_audio_rate",
+    "audio_cache_beyond_prefix", "missing_cacheable_prefix", "negative_cacheable_prefix",
+    "image_in_audio", "bad_audio_timing", "negative_audio_timing",
+])
+def test_bad_audio_response_closes_worker_and_releases_lock(fake_worker, audio_file, mode):
+    with fake_worker(mode, audio=True) as engine:
+        process = engine._process
+        with pytest.raises(RuntimeError, match="Native worker returned"):
+            engine.decide(AUDIO_REQUEST, audio_path=audio_file)
+        assert not engine.loaded and engine._lock_file is None
+        assert process.poll() is not None and engine.last_usage == {}
+
+
+def test_unexpected_audio_metadata_on_text_request_destroys_worker(fake_worker):
+    with fake_worker("audio_in_text", audio=True) as engine:
+        process = engine._process
+        with pytest.raises(RuntimeError, match="audio tokens for a non-audio"):
+            engine.decide(REQUEST)
+        assert process.poll() is not None and not engine.loaded

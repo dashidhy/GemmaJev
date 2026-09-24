@@ -11,6 +11,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstdint>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -47,6 +49,65 @@ double peak_rss_mb() {
 template<class T, void (*Free)(T *)>
 using Handle = std::unique_ptr<T, decltype(Free)>;
 
+#ifdef GEMMAJEV_VISION
+// Validate a bounded canonical WAV before allocating/decoding its waveform.
+// The public audio API accepts only PCM16, mono, 16 kHz and at most 30 seconds.
+std::vector<float> read_audio(const std::string & path) {
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) throw std::runtime_error("audio_path must name a readable WAV file");
+    const auto length = file.tellg();
+    if (length < 44 || length > 20 * 1024 * 1024) {
+        throw std::runtime_error("audio WAV must be nonempty and at most 20 MiB");
+    }
+    std::vector<uint8_t> data(static_cast<size_t>(length));
+    file.seekg(0);
+    if (!file.read(reinterpret_cast<char *>(data.data()), length)) {
+        throw std::runtime_error("truncated WAV file");
+    }
+    auto tag = [&](size_t offset) { return std::string(reinterpret_cast<const char *>(data.data() + offset), 4); };
+    auto u16 = [&](size_t offset) { return uint32_t(data[offset]) | (uint32_t(data[offset + 1]) << 8); };
+    auto u32 = [&](size_t offset) {
+        return uint32_t(data[offset]) | (uint32_t(data[offset + 1]) << 8)
+            | (uint32_t(data[offset + 2]) << 16) | (uint32_t(data[offset + 3]) << 24);
+    };
+    if (tag(0) != "RIFF" || tag(8) != "WAVE" || uint64_t(u32(4)) + 8 != data.size()) {
+        throw std::runtime_error("invalid RIFF/WAVE header or file size");
+    }
+    bool format_found = false;
+    size_t pcm_start = 0, pcm_bytes = 0;
+    for (size_t position = 12; position < data.size();) {
+        if (position + 8 > data.size()) throw std::runtime_error("truncated WAV chunk header");
+        const auto kind = tag(position);
+        const size_t size = u32(position + 4), start = position + 8;
+        const size_t end = start + size, padded_end = end + size % 2;
+        if (padded_end > data.size()) throw std::runtime_error("truncated WAV chunk");
+        if (kind == "fmt ") {
+            if (format_found || size < 16) throw std::runtime_error("invalid WAV format header");
+            if (u16(start) != 1 || u16(start + 2) != 1 || u32(start + 4) != 16000
+                    || u32(start + 8) != 32000 || u16(start + 12) != 2 || u16(start + 14) != 16) {
+                throw std::runtime_error("audio must be PCM16, mono, 16 kHz WAV");
+            }
+            format_found = true;
+        } else if (kind == "data") {
+            if (pcm_start || size == 0 || size % 2) throw std::runtime_error("invalid WAV audio data");
+            if (size / 2 < 640) throw std::runtime_error("audio must be at least 40 milliseconds long");
+            if (size / 2 > 30 * 16000) throw std::runtime_error("audio must be no longer than 30 seconds");
+            pcm_start = start;
+            pcm_bytes = size;
+        }
+        position = padded_end;
+    }
+    if (!format_found || !pcm_start) throw std::runtime_error("WAV format or audio data is missing");
+    std::vector<float> pcm(pcm_bytes / 2);
+    for (size_t i = 0; i < pcm.size(); ++i) {
+        int32_t sample = static_cast<int32_t>(u16(pcm_start + 2 * i));
+        if (sample >= 32768) sample -= 65536;
+        pcm[i] = static_cast<float>(sample) / 32768.0f;
+    }
+    return pcm;
+}
+#endif
+
 struct Options {
     std::string model;
     std::string model_size = "12b";
@@ -65,7 +126,7 @@ Options options(int argc, char ** argv) {
         if (key == "--help" || key == "-h") {
             std::cout << "gemmajev-worker --model FILE --model-size e4b|12b "
                          "[--ctx-size 4096] [--threads 4] [--gpu-layers 99]\n"
-                         "Image builds also accept --mmproj FILE --image-tokens 70|140|280|560|1120\n"
+                         "Multimodal builds also accept --mmproj FILE --image-tokens 70|140|280|560|1120\n"
                          "gemmajev-worker --self-test\n";
             std::exit(0);
         }
@@ -222,6 +283,7 @@ public:
                 {"runtime_patches", runtime_patches()},
                 {"kv_cache", true},
                 {"input_modality", opts_.mmproj.empty() ? "text" : "image"},
+                {"audio_supported", audio_supported()},
                 {"image_token_budget", opts_.mmproj.empty() ? json(nullptr) : json(opts_.image_tokens)},
                 {"batch_size", llama_n_batch(context_.get())},
                 {"microbatch_size", llama_n_ubatch(context_.get())},
@@ -251,6 +313,14 @@ public:
     }
 
 private:
+    bool audio_supported() const {
+#ifdef GEMMAJEV_VISION
+        return vision_ && mtmd_support_audio(vision_.get());
+#else
+        return false;
+#endif
+    }
+
     json score_impl(const json & request, bool & memory_mutated) {
         const auto started = Clock::now();
         if (!request.is_object()) throw std::runtime_error("request must be a JSON object");
@@ -283,25 +353,40 @@ private:
         }
 
         const bool has_image = request.contains("image_path");
+        const bool has_audio = request.contains("audio_path");
+        if (has_image && has_audio) throw std::runtime_error("provide only one image or audio attachment");
+        const bool has_media = has_image || has_audio;
+        const std::string modality = has_audio ? "audio" : has_image ? "image" : "text";
         size_t n_tokens = prefix_tokens.size();
         llama_pos n_positions = static_cast<llama_pos>(n_tokens);
         size_t image_tokens = 0;
+        size_t audio_tokens = 0;
+        double audio_seconds = 0;
         json image_size = nullptr;
 #ifdef GEMMAJEV_VISION
         Handle<mtmd_bitmap, mtmd_bitmap_free> bitmap{nullptr, mtmd_bitmap_free};
         Handle<mtmd_input_chunks, mtmd_input_chunks_free> chunks{nullptr, mtmd_input_chunks_free};
-        std::vector<llama_token> image_prefix, image_suffix;
-        if (has_image) {
-            if (!vision_) throw std::runtime_error("image_path requires a loaded vision projector");
-            const auto path = request.at("image_path").get<std::string>();
+        std::vector<float> audio_pcm;
+        std::vector<llama_token> media_prefix, media_suffix;
+        if (has_media) {
+            if (!vision_) throw std::runtime_error("media input requires a loaded multimodal projector");
+            const auto path = request.at(has_audio ? "audio_path" : "image_path").get<std::string>();
             if (path.empty() || path.find('\0') != std::string::npos) {
-                throw std::runtime_error("invalid image_path");
+                throw std::runtime_error("invalid attachment path");
             }
-            auto wrapped = mtmd_helper_bitmap_init_from_file(vision_.get(), path.c_str(), false);
-            bitmap.reset(wrapped.bitmap);
-            Handle<mtmd_helper_video, mtmd_helper_video_free> video{wrapped.video_ctx, mtmd_helper_video_free};
-            if (!bitmap || video || mtmd_bitmap_is_audio(bitmap.get())) {
-                throw std::runtime_error("image_path must name a readable image file");
+            if (has_audio) {
+                if (!audio_supported()) throw std::runtime_error("the loaded projector does not support audio");
+                audio_pcm = read_audio(path);
+                audio_seconds = audio_pcm.size() / 16000.0;
+                bitmap.reset(mtmd_bitmap_init_from_audio(audio_pcm.size(), audio_pcm.data()));
+                if (!bitmap || !mtmd_bitmap_is_audio(bitmap.get())) throw std::runtime_error("audio initialization failed");
+            } else {
+                auto wrapped = mtmd_helper_bitmap_init_from_file(vision_.get(), path.c_str(), false);
+                bitmap.reset(wrapped.bitmap);
+                Handle<mtmd_helper_video, mtmd_helper_video_free> video{wrapped.video_ctx, mtmd_helper_video_free};
+                if (!bitmap || video || mtmd_bitmap_is_audio(bitmap.get())) {
+                    throw std::runtime_error("image_path must name a readable image file");
+                }
             }
             // Only the trusted media marker reaches mtmd. Caller text is literal.
             chunks.reset(mtmd_input_chunks_init());
@@ -310,30 +395,35 @@ private:
             if (mtmd_tokenize(vision_.get(), chunks.get(), &input, &input_bitmap, 1) != 0) {
                 throw std::runtime_error("multimodal tokenization failed");
             }
-            // Everything before the image is ordinary causal text and is reusable.
-            // The image and response suffix are always recomputed for this request.
-            image_prefix = tokenize(vocab_, "<|turn>", true, true);
+            // Everything before the attachment is causal text and is reusable.
+            // Media and the response suffix are always recomputed for this request.
+            media_prefix = tokenize(vocab_, "<|turn>", true, true);
             const auto body = tokenize(vocab_, "user\n" + prompt + "\n", false, false);
-            image_prefix.insert(image_prefix.end(), body.begin(), body.end());
-            image_suffix = tokenize(vocab_, "\n<turn|>\n" + prefix, false, true);
-            prefix_tokens = image_prefix;
-            n_tokens = image_prefix.size() + mtmd_helper_get_n_tokens(chunks.get()) + image_suffix.size();
-            n_positions = image_prefix.size() + mtmd_helper_get_n_pos(chunks.get()) + image_suffix.size();
-            image_size = {mtmd_bitmap_get_nx(bitmap.get()), mtmd_bitmap_get_ny(bitmap.get())};
+            media_prefix.insert(media_prefix.end(), body.begin(), body.end());
+            media_suffix = tokenize(vocab_, "\n<turn|>\n" + prefix, false, true);
+            prefix_tokens = media_prefix;
+            n_tokens = media_prefix.size() + mtmd_helper_get_n_tokens(chunks.get()) + media_suffix.size();
+            n_positions = media_prefix.size() + mtmd_helper_get_n_pos(chunks.get()) + media_suffix.size();
+            if (has_image) image_size = {mtmd_bitmap_get_nx(bitmap.get()), mtmd_bitmap_get_ny(bitmap.get())};
             for (size_t i = 0; i < mtmd_input_chunks_size(chunks.get()); ++i) {
                 const auto * chunk = mtmd_input_chunks_get(chunks.get(), i);
                 if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+                    if (!has_image) throw std::runtime_error("unexpected image in audio input");
                     const auto count = mtmd_input_chunk_get_n_tokens(chunk);
                     if (count > llama_n_ubatch(context_.get())) {
                         throw std::runtime_error("image embeddings exceed the non-causal microbatch");
                     }
                     image_tokens += count;
+                } else if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
+                    if (!has_audio) throw std::runtime_error("unexpected audio in image input");
+                    audio_tokens += mtmd_input_chunk_get_n_tokens(chunk);
                 }
             }
-            if (image_tokens == 0) throw std::runtime_error("image produced no visual tokens");
+            if (has_image && image_tokens == 0) throw std::runtime_error("image produced no visual tokens");
+            if (has_audio && audio_tokens == 0) throw std::runtime_error("audio produced no audio tokens");
         }
 #else
-        if (has_image) throw std::runtime_error("image_path requires the vision worker");
+        if (has_media) throw std::runtime_error("media input requires the multimodal worker");
 #endif
         if (n_positions > static_cast<llama_pos>(llama_n_ctx(context_.get()))) {
             throw std::runtime_error("input exceeds the context window");
@@ -341,10 +431,11 @@ private:
         const double preprocess_ms = milliseconds(started);
         const auto reset_start = Clock::now();
         memory_mutated = true;
-        const auto cache = prepare_cache(prefix_tokens, reset_cache, has_image);
+        const auto cache = prepare_cache(prefix_tokens, reset_cache, modality);
         double prefill_ms = milliseconds(reset_start);
         double vision_ms = 0;
-        if (!has_image) {
+        double audio_ms = 0;
+        if (!has_media) {
             const auto decode_start = Clock::now();
             decode_text(prefix_tokens, cache.reused_tokens, 0, true);
             prefill_ms += milliseconds(decode_start);
@@ -352,37 +443,38 @@ private:
 #ifdef GEMMAJEV_VISION
         else {
             const auto prefix_start = Clock::now();
-            llama_pos n_past = decode_text(image_prefix, cache.reused_tokens, 0, false);
+            llama_pos n_past = decode_text(media_prefix, cache.reused_tokens, 0, false);
             prefill_ms += milliseconds(prefix_start);
             for (size_t i = 0; i < mtmd_input_chunks_size(chunks.get()); ++i) {
                 const auto * chunk = mtmd_input_chunks_get(chunks.get(), i);
                 const auto type = mtmd_input_chunk_get_type(chunk);
-                if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+                if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE || type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
                     const auto encode_start = Clock::now();
                     if (mtmd_encode_chunk(vision_.get(), chunk) != 0) {
-                        throw std::runtime_error("vision encoding failed");
+                        throw std::runtime_error("media encoding failed");
                     }
-                    vision_ms += milliseconds(encode_start);
+                    if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE) vision_ms += milliseconds(encode_start);
+                    else audio_ms += milliseconds(encode_start);
                     const auto decode_start = Clock::now();
                     if (mtmd_helper_decode_image_chunk(vision_.get(), context_.get(), chunk,
                             mtmd_get_output_embd(vision_.get()), n_past, 0,
                             static_cast<int32_t>(llama_n_batch(context_.get())), &n_past, nullptr, nullptr) != 0) {
-                        throw std::runtime_error("image embedding prefill failed");
+                        throw std::runtime_error("media embedding prefill failed");
                     }
                     prefill_ms += milliseconds(decode_start);
                 } else if (type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
                     const auto decode_start = Clock::now();
                     if (mtmd_helper_eval_chunk_single(vision_.get(), context_.get(), chunk, n_past, 0,
                             static_cast<int32_t>(llama_n_batch(context_.get())), false, &n_past) != 0) {
-                        throw std::runtime_error("image boundary prefill failed");
+                        throw std::runtime_error("media boundary prefill failed");
                     }
                     prefill_ms += milliseconds(decode_start);
                 } else {
-                    throw std::runtime_error("unexpected non-image media chunk");
+                    throw std::runtime_error("unexpected media chunk");
                 }
             }
             const auto suffix_start = Clock::now();
-            n_past = decode_text(image_suffix, 0, n_past, true);
+            n_past = decode_text(media_suffix, 0, n_past, true);
             if (n_past != n_positions) throw std::runtime_error("multimodal position accounting mismatch");
             prefill_ms += milliseconds(suffix_start);
         }
@@ -433,8 +525,12 @@ private:
                 {"greedy_token", {{"token_id", greedy}, {"piece", piece(vocab_, greedy)},
                                   {"logit", logits[greedy]}, {"probability", std::exp(logits[greedy] - full_log_z)}}},
                 {"prompt_tokens", n_tokens}, {"image_tokens", image_tokens}, {"image_size", image_size},
-                {"input_modality", has_image ? "image" : "text"},
+                {"input_modality", modality},
                 {"image_position", has_image ? json("after_text") : json(nullptr)},
+                {"audio_tokens", audio_tokens},
+                {"audio_position", has_audio ? json("after_text") : json(nullptr)},
+                {"audio_duration_seconds", has_audio ? json(audio_seconds) : json(nullptr)},
+                {"audio_sample_rate", has_audio ? json(16000) : json(nullptr)},
                 {"cacheable_prefix_tokens", prefix_tokens.size()},
                 {"image_token_budget", has_image ? json(opts_.image_tokens) : json(nullptr)},
                 {"image_resize_mode", has_image ? json("gemma4_max_budget_floor") : json(nullptr)},
@@ -446,15 +542,15 @@ private:
                 {"kv_cache", {{"enabled", true}, {"reused_tokens", cache.reused_tokens},
                               {"evaluated_tokens", n_tokens - cache.reused_tokens}, {"prompt_tokens", n_tokens},
                               {"reset_reason", cache.reset_reason.empty() ? json(nullptr) : json(cache.reset_reason)}}},
-                {"timings_ms", {{"preprocess", preprocess_ms}, {"vision_encode", vision_ms},
+                {"timings_ms", {{"preprocess", preprocess_ms}, {"vision_encode", vision_ms}, {"audio_encode", audio_ms},
                                 {"prefill", prefill_ms}, {"score", score_ms}, {"total", milliseconds(started)}}}};
         // Publish token provenance only after decoding and score construction
         // both succeed. The selected candidate itself is never appended to KV.
-        // For image requests, provenance stops before the first image boundary.
-        // Physical KV still contains the image/suffix until the next trim.
+        // For media requests, provenance stops before the first media boundary.
+        // Physical KV still contains the media/suffix until the next trim.
         cached_tokens_ = std::move(prefix_tokens);
         cached_positions_ = n_positions;
-        cached_image_ = has_image;
+        cached_modality_ = modality;
         return result;
     }
 
@@ -487,7 +583,8 @@ private:
     };
 
     CacheDecision prepare_cache(const std::vector<llama_token> & tokens, bool requested_reset,
-                                bool full_prefix_allowed = false) {
+                                const std::string & modality) {
+        const bool full_prefix_allowed = modality != "text";
         const auto memory = llama_get_memory(context_.get());
         const bool previous_failed = previous_request_failed_;
         previous_request_failed_ = false;
@@ -495,16 +592,18 @@ private:
             llama_memory_clear(memory, true);
             cached_tokens_.clear();
             cached_positions_ = 0;
-            cached_image_ = false;
+            cached_modality_ = "text";
             return CacheDecision{0, reason};
         };
         if (requested_reset) return clear("requested");
         if (cached_tokens_.empty()) return clear(previous_failed ? "previous_request_failed" : "empty");
-        // Keep image prefix reuse within one identical textual task. Different
+        // Keep media prefix reuse within one identical textual task. Different
         // prefill shapes can produce different Metal rounding, so transitions
-        // between text/image modes or image-task prompts start afresh.
-        if (cached_image_ != full_prefix_allowed) return clear("modality_changed");
-        if (full_prefix_allowed && cached_tokens_ != tokens) return clear("image_text_changed");
+        // between text/image/audio modes or media-task prompts start afresh.
+        if (cached_modality_ != modality) return clear("modality_changed");
+        if (full_prefix_allowed && cached_tokens_ != tokens) {
+            return clear(modality == "image" ? "image_text_changed" : "audio_text_changed");
+        }
 
         // The pinned API guarantees all positions between min and max exist.
         // Gemma 4's ISWA implementation reports the SWA cache; its full-attention
@@ -543,7 +642,7 @@ private:
     double load_ms_ = 0;
     std::vector<llama_token> cached_tokens_;
     llama_pos cached_positions_ = 0;
-    bool cached_image_ = false;
+    std::string cached_modality_ = "text";
     bool previous_request_failed_ = false;
 };
 

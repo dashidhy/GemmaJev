@@ -141,7 +141,10 @@ def test_vision_setup_downloads_matching_projector_only_when_requested(tmp_path,
     assert options == {"size": config["mmproj_size"], "sha256": config["mmproj_sha256"]}
 
 
-def test_cli_vision_setup_prepares_both_workers_and_suggests_playground(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("flag", ["--vision", "--audio"])
+def test_cli_vision_setup_prepares_both_workers_and_suggests_playground(
+    tmp_path, monkeypatch, capsys, flag,
+):
     import shlex
 
     calls = []
@@ -150,7 +153,7 @@ def test_cli_vision_setup_prepares_both_workers_and_suggests_playground(tmp_path
     monkeypatch.setattr(
         cli, "prepare_model", lambda model, root, **kwargs: calls.append((model, kwargs))
     )
-    assert cli.main(["setup", "--vision", "--model", "e4b", "--workspace", str(tmp_path)]) == 0
+    assert cli.main(["setup", flag, "--model", "e4b", "--workspace", str(tmp_path)]) == 0
     assert calls == [("build", {}), ("build", {"vision": True}), ("e4b", {"vision": True})]
     output = capsys.readouterr().out
     assert shlex.split(output.split("Ready. Run: ")[1].strip()) == [
@@ -158,16 +161,17 @@ def test_cli_vision_setup_prepares_both_workers_and_suggests_playground(tmp_path
     ]
 
 
-def test_cli_image_decision_preserves_request_and_enables_vision(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("kind", ["image", "audio"])
+def test_cli_media_decision_preserves_request_and_enables_runtime(tmp_path, monkeypatch, capsys, kind):
     from gemmajev import engine
 
     request = {
-        "task": "Identify the image.", "state": "An image is attached.",
+        "task": "Identify the attached media.", "state": "A media file is attached.",
         "query": "Which object?", "options": {"cat": "A cat", "dog": "A dog"},
     }
     source = tmp_path / "request.json"
     source.write_text(json.dumps(request))
-    image = tmp_path / "example.png"
+    attachment = tmp_path / ("example.png" if kind == "image" else "example.wav")
     calls = []
 
     class FakeModel:
@@ -183,10 +187,19 @@ def test_cli_image_decision_preserves_request_and_enables_vision(tmp_path, monke
 
     monkeypatch.setattr(engine, "GemmaJev", FakeModel)
     assert cli.main([
-        "decide", str(source), "--model", "e4b", "--image", str(image), "--image-tokens", "140"
+        "decide", str(source), "--model", "e4b", f"--{kind}", str(attachment),
+        "--image-tokens", "140",
     ]) == 0
     assert calls == [
-        {"model": "e4b", "workspace": None, "vision": True, "image_tokens": 140},
-        (request, {"image_path": image}), "closed",
+        {"model": "e4b", "workspace": None,
+         **({"vision": True, "image_tokens": 140} if kind == "image" else {"audio": True})},
+        (request, {f"{kind}_path": attachment}), "closed",
     ]
     assert json.loads(capsys.readouterr().out) == {"cat": 0.8, "dog": 0.2}
+
+
+def test_cli_rejects_two_attachments_before_loading(capsys):
+    with pytest.raises(SystemExit) as error:
+        cli.main(["decide", "missing.json", "--image", "image.png", "--audio", "audio.wav"])
+    assert error.value.code == 2
+    assert "not allowed with argument" in capsys.readouterr().err

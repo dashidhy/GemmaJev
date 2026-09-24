@@ -38,6 +38,7 @@ def _run(argv: list[str] | None = None) -> int:
     setup.add_argument("--model", choices=(*MODELS, "all"), default="12b")
     setup.add_argument("--workspace", type=Path)
     setup.add_argument("--vision", action="store_true", help="Also prepare the image projector")
+    setup.add_argument("--audio", action="store_true", help="Also prepare the audio-capable projector")
     build = commands.add_parser("build", help="Download and compile the pinned runtime")
     build.add_argument("--vision", action="store_true", help="Build the separate vision worker")
     build.add_argument("--workspace", type=Path)
@@ -45,7 +46,9 @@ def _run(argv: list[str] | None = None) -> int:
     decide.add_argument("request", help="Request JSON file, or -")
     decide.add_argument("--model", choices=MODELS, default="12b")
     decide.add_argument("--workspace", type=Path)
-    decide.add_argument("--image", type=Path, help="Condition on one image using the vision worker")
+    media = decide.add_mutually_exclusive_group()
+    media.add_argument("--image", type=Path, help="Condition on one image using the multimodal worker")
+    media.add_argument("--audio", type=Path, help="Condition on one PCM16 mono 16 kHz WAV (up to 30 s)")
     decide.add_argument("--image-tokens", type=int, choices=(70, 140, 280, 560, 1120), default=70)
     demo = commands.add_parser("demo", help="Open the local interactive Playground")
     demo.add_argument("--model", choices=MODELS, default="12b")
@@ -63,22 +66,23 @@ def _run(argv: list[str] | None = None) -> int:
         hardware = check_platform()
         print(f"macOS · {hardware['chip']} · {hardware['memory_bytes'] / 2**30:.0f} GiB")
         root = workspace_root(args.workspace)
-        vision_options = {"vision": True} if args.vision else {}
+        multimodal = args.vision or args.audio
+        vision_options = {"vision": True} if multimodal else {}
         build_runtime(root)
-        if args.vision:
+        if multimodal:
             build_runtime(root, vision=True)
         for model in MODELS if args.model == "all" else (args.model,):
             print(f"Preparing {model}…", flush=True)
             print(prepare_model(model, root, **vision_options))
         command = [
-            "uv", "run", "gemmajev", "demo" if args.vision else "setup",
+            "uv", "run", "gemmajev", "demo" if multimodal else "setup",
             "--model", "12b" if args.model == "all" else args.model,
         ]
-        if not args.vision:
+        if not multimodal:
             command.append("--vision")
         if args.workspace is not None:
             command += ["--workspace", str(root)]
-        print(f"{'Ready. Run' if args.vision else 'To open Playground'}: {shlex.join(command)}")
+        print(f"{'Ready. Run' if multimodal else 'To open Playground'}: {shlex.join(command)}")
     elif args.command == "decide":
         from .engine import GemmaJev
         from .request import validate_request
@@ -87,12 +91,16 @@ def _run(argv: list[str] | None = None) -> int:
         engine_options = (
             {"vision": True, "image_tokens": args.image_tokens} if args.image is not None else {}
         )
+        if args.audio is not None:
+            engine_options = {"audio": True}
         model = GemmaJev(model=args.model, workspace=args.workspace, **engine_options)
         try:
-            if args.image is None:
-                probabilities = model.decide(request)
-            else:
+            if args.image is not None:
                 probabilities = model.decide(request, image_path=args.image)
+            elif args.audio is not None:
+                probabilities = model.decide(request, audio_path=args.audio)
+            else:
+                probabilities = model.decide(request)
         finally:
             model.close()
         print(json.dumps(probabilities, ensure_ascii=False, indent=2, allow_nan=False))

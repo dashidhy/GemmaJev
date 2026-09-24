@@ -9,11 +9,20 @@ let currentModel = "12b";
 let busy = true;
 let lastResult = null;
 let imageSamples = [];
-let currentImage = null;
-let imageRevision = 0;
+let audioSamples = [];
+let currentAttachment = null;
+let attachmentRevision = 0;
 
-function exampleHasImage(example = selectedExample) {
-  return Boolean(example?.image_id);
+function exampleModality(example = selectedExample) {
+  return example?.modality || (example?.audio_id ? "audio" : example?.image_id ? "image" : "text");
+}
+
+function attachmentPayload() {
+  return currentAttachment ? {[`${currentAttachment.kind}_id`]: currentAttachment.id} : {};
+}
+
+function sameAttachment(first, second) {
+  return (first.image_id || null) === (second.image_id || null) && (first.audio_id || null) === (second.audio_id || null);
 }
 
 function setStatus(message, kind = "ready") {
@@ -33,14 +42,20 @@ function syncControls() {
     button.disabled = busy || count <= 2;
   });
   $("restore-example").disabled = busy || selectedExample === null;
-  const imageEnabled = exampleHasImage();
-  $("image-panel").querySelectorAll("button, input").forEach((control) => {
-    control.disabled = busy || !imageEnabled;
+  const modality = exampleModality();
+  $("attachment-panel").querySelectorAll("button, input, select").forEach((control) => {
+    control.disabled = busy || modality === "text";
   });
-  $("clear-image").disabled = busy || !imageEnabled || currentImage === null;
-  $("image-panel").setAttribute("aria-disabled", String(!imageEnabled));
+  $("clear-attachment").disabled = busy || modality === "text" || currentAttachment === null;
+  $("attachment-panel").setAttribute("aria-disabled", String(modality === "text"));
+  $("image-samples").hidden = modality !== "image";
+  $("audio-sample").hidden = modality !== "audio";
+  $("attachment-file").accept = modality === "audio" ? ".wav,audio/wav,audio/x-wav" : "image/png,image/jpeg";
+  // Playback does not change model input; users can always pause a loaded clip.
+  $("audio-play").disabled = currentAttachment?.kind !== "audio";
+  $("audio-seek").disabled = currentAttachment?.kind !== "audio";
   $("input-panel").setAttribute("aria-busy", String(busy));
-  $("image-panel").setAttribute("aria-busy", String(busy));
+  $("attachment-panel").setAttribute("aria-busy", String(busy));
 }
 
 function setBusy(value) {
@@ -79,7 +94,7 @@ function edited() {
   }
   let matches = false;
   try {
-    matches = lastResult.model === currentModel && (lastResult.image_id || null) === (currentImage?.id || null) && JSON.stringify(getRequest()) === JSON.stringify(lastResult.request);
+    matches = lastResult.model === currentModel && sameAttachment(lastResult, attachmentPayload()) && JSON.stringify(getRequest()) === JSON.stringify(lastResult.request);
   } catch {
     // An incomplete edit still makes the old result stale; validate on Run.
   }
@@ -142,62 +157,144 @@ function clearResult() {
   renderResult(null);
 }
 
-function clearImage(message = exampleHasImage()
-  ? "No image attached"
-  : "This example uses text only. Select Image style to add an image.") {
-  imageRevision += 1;
-  currentImage = null;
+function clearAttachment(message) {
+  attachmentRevision += 1;
+  currentAttachment = null;
+  const player = $("audio-source");
+  player.pause();
+  player.removeAttribute("src");
+  player.load();
+  $("audio-player").hidden = true;
+  $("audio-sample").value = "";
+  $("audio-play").textContent = "Play";
+  $("audio-seek").value = "0";
+  $("audio-time").textContent = "0:00 / 0:00";
   $("image-preview").removeAttribute("src");
   $("image-preview").hidden = true;
-  $("image-placeholder").textContent = message;
-  $("image-placeholder").hidden = false;
+  const modality = exampleModality();
+  $("attachment-placeholder").textContent = message || (modality === "text"
+    ? "This example uses text only. Select an image or audio example to add an attachment."
+    : modality === "audio" ? "Choose an audio sample or upload a WAV clip." : "No image attached");
+  $("attachment-placeholder").hidden = false;
   document.querySelectorAll(".image-sample").forEach((button) => button.setAttribute("aria-pressed", "false"));
-  return imageRevision;
+  return attachmentRevision;
 }
 
-function localImageURL(value) {
+function localAttachmentURL(value, kind) {
   const url = new URL(value, window.location.origin);
-  if (url.origin !== window.location.origin || !url.pathname.startsWith("/api/images/")) {
-    throw new Error("The image must come from this Playground.");
+  const prefix = kind === "audio" ? "/api/audio/" : "/api/images/";
+  if (url.origin !== window.location.origin || !url.pathname.startsWith(prefix)) {
+    throw new Error("The attachment must come from this Playground.");
   }
   return url.href;
 }
 
-async function displayImage(selection, revision) {
-  const preview = new Image();
-  preview.id = "image-preview";
-  preview.alt = selection.title || "Uploaded image";
-  preview.src = localImageURL(selection.url);
-  try {
-    await preview.decode();
-  } catch {
-    throw new Error("Could not load the image. Check that the Playground server is running, then try again.");
-  }
-  if (revision !== imageRevision) return;
-  $("image-preview").replaceWith(preview);
-  $("image-placeholder").hidden = true;
-  currentImage = {id: selection.id || selection.image_id, url: selection.url};
-  document.querySelectorAll(".image-sample").forEach((button) => {
-    button.setAttribute("aria-pressed", String(button.dataset.image === currentImage.id));
-  });
+function playbackTime(value) {
+  const seconds = Math.max(0, Math.floor(Number.isFinite(value) ? value : 0));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-async function chooseImage(selection) {
-  if (!exampleHasImage()) return;
+function updatePlayback() {
+  const player = $("audio-source");
+  const duration = Number.isFinite(player.duration) ? player.duration : 0;
+  $("audio-play").textContent = player.paused || player.ended ? "Play" : "Pause";
+  $("audio-seek").max = String(duration);
+  $("audio-seek").value = String(player.currentTime || 0);
+  $("audio-seek").setAttribute("aria-valuetext", `${playbackTime(player.currentTime)} of ${playbackTime(duration)}`);
+  $("audio-time").textContent = `${playbackTime(player.currentTime)} / ${playbackTime(duration)}`;
+}
+
+function disposeAudio(player) {
+  player.pause();
+  player.removeAttribute("src");
+  player.load();
+}
+
+async function displayAttachment(kind, selection, revision) {
+  const url = localAttachmentURL(selection.url, kind);
+  const id = selection.id || selection[`${kind}_id`];
+  if (typeof id !== "string" || !id) throw new Error("The attachment has no valid ID.");
+  if (kind === "image") {
+    const preview = new Image();
+    preview.id = "image-preview";
+    preview.alt = selection.title || "Uploaded image";
+    preview.src = url;
+    try {
+      await preview.decode();
+    } catch {
+      throw new Error("Could not load the image. Check that the Playground server is running, then try again.");
+    }
+    if (revision !== attachmentRevision) return;
+    $("image-preview").replaceWith(preview);
+    document.querySelectorAll(".image-sample").forEach((button) => {
+      button.setAttribute("aria-pressed", String(button.dataset.image === id));
+    });
+  } else {
+    const player = new Audio();
+    player.id = "audio-source";
+    player.hidden = true;
+    player.preload = "metadata";
+    try {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => finish(new Error("Audio loading timed out. Try selecting it again.")), 15000);
+        const loaded = () => finish();
+        const failed = () => finish(new Error("Could not load the audio. Check that the Playground server is running, then try again."));
+        function finish(error) {
+          clearTimeout(timer);
+          player.removeEventListener("loadedmetadata", loaded);
+          player.removeEventListener("error", failed);
+          error ? reject(error) : resolve();
+        }
+        player.addEventListener("loadedmetadata", loaded);
+        player.addEventListener("error", failed);
+        player.src = url;
+        player.load();
+      });
+      if (!Number.isFinite(player.duration) || player.duration < 0.04 || player.duration > 30) {
+        throw new Error("Choose an audio clip between 40 milliseconds and 30 seconds.");
+      }
+      if (revision !== attachmentRevision) {
+        disposeAudio(player);
+        return;
+      }
+      $("audio-source").replaceWith(player);
+      for (const event of ["timeupdate", "play", "pause", "ended", "durationchange"]) {
+        player.addEventListener(event, () => { if ($("audio-source") === player) updatePlayback(); });
+      }
+      player.addEventListener("error", () => {
+        if ($("audio-source") === player && currentAttachment?.id === id) {
+          setStatus("Audio playback failed. Select the clip again.", "error");
+        }
+      });
+      $("audio-name").textContent = selection.title || "Uploaded audio";
+      $("audio-player").hidden = false;
+      $("audio-sample").value = audioSamples.some((sample) => sample.id === id) ? id : "";
+      updatePlayback();
+    } catch (error) {
+      disposeAudio(player);
+      throw error;
+    }
+  }
+  $("attachment-placeholder").hidden = true;
+  currentAttachment = {kind, id, url: selection.url};
+}
+
+async function chooseAttachment(kind, selection) {
+  if (exampleModality() !== kind) return;
   clearResult();
-  const revision = clearImage("Loading image…");
+  const revision = clearAttachment(`Loading ${kind}…`);
   setBusy(true);
-  setStatus("Loading image…", "running");
+  setStatus(`Loading ${kind}…`, "running");
   try {
-    await displayImage(selection, revision);
-    if (revision === imageRevision) setStatus("Ready to run.");
+    await displayAttachment(kind, selection, revision);
+    if (revision === attachmentRevision) setStatus("Ready to run.");
   } catch (error) {
-    if (revision === imageRevision) {
-      $("image-placeholder").textContent = error.message;
+    if (revision === attachmentRevision) {
+      $("attachment-placeholder").textContent = error.message;
       setStatus(error.message, "error");
     }
   } finally {
-    if (revision === imageRevision) setBusy(false);
+    if (revision === attachmentRevision) setBusy(false);
   }
 }
 
@@ -211,17 +308,18 @@ async function selectExample(example) {
   for (const [id, description] of Object.entries(example.request.options)) addOption(id, description);
   $("options-scroll").scrollTop = 0;
   clearResult();
-  clearImage();
+  clearAttachment();
   document.querySelectorAll(".example-button").forEach((button) => {
     button.setAttribute("aria-pressed", String(button.dataset.example === example.id));
   });
-  if (example.image_id) {
-    const sample = imageSamples.find((item) => item.id === example.image_id);
+  const kind = exampleModality();
+  if (kind !== "text") {
+    const sample = (kind === "audio" ? audioSamples : imageSamples).find((item) => item.id === example[`${kind}_id`]);
     if (sample) {
-      await chooseImage(sample);
+      await chooseAttachment(kind, sample);
       return;
     }
-    setStatus("The example image is unavailable. Upload an image to continue.", "error");
+    setStatus(`Choose a sample or upload ${kind === "audio" ? "a WAV clip" : "an image"}.`);
   } else {
     setStatus("Ready to run.");
   }
@@ -261,7 +359,7 @@ function renderResult(result, previous = null) {
   winner.textContent = selected[0];
   winner.title = selected[0];
   $("result-meta").textContent = `Gemma 4 ${result.model.toUpperCase()} · ${(result.request_ms / 1000).toFixed(2)} s`;
-  const comparable = previous && (result.image_id || null) === (previous.image_id || null) && sameOptions(result.request.options, previous.request.options);
+  const comparable = previous && sameAttachment(result, previous) && sameOptions(result.request.options, previous.request.options);
   for (const [id, probability] of probabilities) {
     const row = document.createElement("div");
     row.className = "probability-row";
@@ -315,8 +413,8 @@ $("input-panel").addEventListener("submit", async (event) => {
   if (busy) return;
   let request;
   try {
-    if (exampleHasImage() && !currentImage) {
-      throw new Error("Choose a sample or upload an image before running Image style.");
+    if (exampleModality() !== "text" && !currentAttachment) {
+      throw new Error("Choose a sample or upload an attachment before running this example.");
     }
     request = getRequest();
   } catch (error) {
@@ -326,7 +424,7 @@ $("input-panel").addEventListener("submit", async (event) => {
   setBusy(true);
   setStatus("Running…", "running");
   try {
-    const result = await api("/api/decide", {model: currentModel, request, ...(currentImage ? {image_id: currentImage.id} : {})});
+    const result = await api("/api/decide", {model: currentModel, request, ...attachmentPayload()});
     renderResult(result, lastResult);
     lastResult = result;
     setStatus("Ready · result matches this input.");
@@ -421,46 +519,155 @@ async function normalizedPNG(file) {
   }
 }
 
-$("upload-image").addEventListener("click", () => {
-  if (!busy && exampleHasImage()) $("image-file").click();
+function wavInfo(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const view = new DataView(buffer);
+  const tag = (offset) => String.fromCharCode(...bytes.subarray(offset, offset + 4));
+  const invalid = () => new Error("Choose an uncompressed PCM or float WAV file with one or two channels.");
+  if (bytes.length < 44 || bytes.length > 20 * 1024 * 1024 || tag(0) !== "RIFF" || tag(8) !== "WAVE" || view.getUint32(4, true) + 8 !== bytes.length) {
+    throw invalid();
+  }
+  let format = null;
+  let dataBytes = null;
+  let offset = 12;
+  while (offset < bytes.length) {
+    if (offset + 8 > bytes.length) throw invalid();
+    const kind = tag(offset);
+    const length = view.getUint32(offset + 4, true);
+    const start = offset + 8;
+    const end = start + length;
+    if (end > bytes.length) throw invalid();
+    if (kind === "fmt ") {
+      if (format || length < 16) throw invalid();
+      format = {
+        codec: view.getUint16(start, true), channels: view.getUint16(start + 2, true),
+        rate: view.getUint32(start + 4, true), byteRate: view.getUint32(start + 8, true),
+        align: view.getUint16(start + 12, true), bits: view.getUint16(start + 14, true),
+      };
+    } else if (kind === "data") {
+      if (dataBytes !== null) throw invalid();
+      dataBytes = length;
+    }
+    offset = end + (length % 2);
+    if (offset > bytes.length) throw invalid();
+  }
+  if (!format || dataBytes === null || ![1, 2].includes(format.channels)
+      || format.rate < 8000 || format.rate > 192000
+      || !((format.codec === 1 && [8, 16, 24, 32].includes(format.bits)) || (format.codec === 3 && format.bits === 32))
+      || format.align !== format.channels * format.bits / 8 || format.byteRate !== format.rate * format.align
+      || dataBytes % format.align !== 0) throw invalid();
+  const duration = dataBytes / format.align / format.rate;
+  if (duration < 0.04 || duration > 30) {
+    throw new Error("Choose an audio clip between 40 milliseconds and 30 seconds.");
+  }
+  return {duration, channels: format.channels, sampleRate: format.rate};
+}
+
+function pcm16WAV(audio) {
+  if (audio.sampleRate !== 16000 || ![1, 2].includes(audio.numberOfChannels) || audio.length < 640 || audio.length > 480000) {
+    throw new Error("Audio conversion must produce 40 milliseconds to 30 seconds at 16 kHz.");
+  }
+  const output = new ArrayBuffer(44 + audio.length * 2);
+  const view = new DataView(output);
+  const text = (offset, value) => { for (let i = 0; i < value.length; i += 1) view.setUint8(offset + i, value.charCodeAt(i)); };
+  text(0, "RIFF"); view.setUint32(4, output.byteLength - 8, true); text(8, "WAVE");
+  text(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true); view.setUint32(24, 16000, true); view.setUint32(28, 32000, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  text(36, "data"); view.setUint32(40, audio.length * 2, true);
+  const channels = Array.from({length: audio.numberOfChannels}, (_, index) => audio.getChannelData(index));
+  for (let frame = 0; frame < audio.length; frame += 1) {
+    let sample = 0;
+    for (const channel of channels) {
+      if (!Number.isFinite(channel[frame])) throw new Error("The audio contains invalid sample values.");
+      sample += channel[frame] / channels.length;
+    }
+    sample = Math.max(-1, Math.min(1, sample));
+    view.setInt16(44 + frame * 2, Math.round(sample * (sample < 0 ? 32768 : 32767)), true);
+  }
+  return new Blob([output], {type: "audio/wav"});
+}
+
+async function normalizedWAV(file) {
+  const buffer = await file.arrayBuffer();
+  wavInfo(buffer); // Check decoded duration and allocation bounds before invoking Web Audio.
+  const OfflineContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  if (!OfflineContext) throw new Error("This browser does not support audio conversion.");
+  const context = new OfflineContext(1, 1, 16000);
+  let audio;
+  try {
+    audio = await context.decodeAudioData(buffer);
+  } catch {
+    throw new Error("This WAV file could not be decoded. Choose another PCM or float WAV file.");
+  }
+  return pcm16WAV(audio);
+}
+
+$("upload-attachment").addEventListener("click", () => {
+  if (!busy && exampleModality() !== "text") $("attachment-file").click();
 });
-$("clear-image").addEventListener("click", () => {
-  if (busy || !exampleHasImage()) return;
-  clearImage();
+$("clear-attachment").addEventListener("click", () => {
+  if (busy || exampleModality() === "text") return;
+  clearAttachment();
   clearResult();
   syncControls();
-  setStatus("Choose a sample or upload an image.");
+  setStatus("Choose a sample or upload an attachment.");
 });
-$("image-file").addEventListener("change", async () => {
-  const file = $("image-file").files[0];
-  $("image-file").value = "";
-  if (busy || !exampleHasImage() || !file) return;
+$("attachment-file").addEventListener("change", async () => {
+  const file = $("attachment-file").files[0];
+  $("attachment-file").value = "";
+  const kind = exampleModality();
+  if (busy || kind === "text" || !file) return;
   if (file.size === 0 || file.size > 20 * 1024 * 1024) {
-    setStatus("Choose a PNG or JPEG image up to 20 MiB.", "error");
+    setStatus(`Choose ${kind === "audio" ? "a WAV file" : "a PNG or JPEG image"} up to 20 MiB.`, "error");
     return;
   }
   clearResult();
-  const revision = clearImage("Preparing image…");
+  const revision = clearAttachment(`Preparing ${kind}…`);
   setBusy(true);
-  setStatus("Preparing image…", "running");
+  setStatus(`Preparing ${kind}…`, "running");
   try {
-    const png = await normalizedPNG(file);
-    if (revision !== imageRevision) return;
-    setStatus("Uploading image…", "running");
-    const selection = await readResponse(await fetch("/api/image", {
-      method: "POST", headers: {"Content-Type": "image/png"}, body: png,
+    const data = kind === "audio" ? await normalizedWAV(file) : await normalizedPNG(file);
+    if (revision !== attachmentRevision) return;
+    setStatus(`Uploading ${kind}…`, "running");
+    const selection = await readResponse(await fetch(kind === "audio" ? "/api/audio" : "/api/image", {
+      method: "POST", headers: {"Content-Type": kind === "audio" ? "audio/wav" : "image/png"}, body: data,
     }));
-    if (revision !== imageRevision) return;
-    await displayImage(selection, revision);
-    if (revision === imageRevision) setStatus("Ready to run.");
+    if (revision !== attachmentRevision) return;
+    await displayAttachment(kind, selection, revision);
+    if (revision === attachmentRevision) setStatus("Ready to run.");
   } catch (error) {
-    if (revision === imageRevision) {
-      $("image-placeholder").textContent = error.message;
+    if (revision === attachmentRevision) {
+      $("attachment-placeholder").textContent = error.message;
       setStatus(error.message, "error");
     }
   } finally {
-    if (revision === imageRevision) setBusy(false);
+    if (revision === attachmentRevision) setBusy(false);
   }
+});
+$("audio-sample").addEventListener("change", () => {
+  if (busy || exampleModality() !== "audio") return;
+  const sample = audioSamples.find((item) => item.id === $("audio-sample").value);
+  if (sample) void chooseAttachment("audio", sample);
+});
+$("audio-play").addEventListener("click", async () => {
+  if (currentAttachment?.kind !== "audio") return;
+  const player = $("audio-source");
+  if (!player.paused) { player.pause(); return; }
+  try {
+    if (player.ended) player.currentTime = 0;
+    await player.play();
+  } catch {
+    if (player === $("audio-source") && currentAttachment?.kind === "audio") {
+      setStatus("Could not play the audio. Press Play to try again.", "error");
+    }
+  }
+});
+$("audio-seek").addEventListener("input", () => {
+  if (currentAttachment?.kind !== "audio") return;
+  const player = $("audio-source");
+  player.currentTime = Number($("audio-seek").value);
+  updatePlayback();
 });
 
 $("model-select").addEventListener("change", async () => {
@@ -487,15 +694,17 @@ async function initialize() {
     currentModel = config.model;
     examples = config.examples;
     imageSamples = config.image_samples || [];
+    audioSamples = config.audio_samples || [];
     $("model-select").value = currentModel;
     for (const example of examples) {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "example-button";
       button.dataset.example = example.id;
-      button.dataset.modality = exampleHasImage(example) ? "image" : "text";
-      button.title = exampleHasImage(example) ? "Image example" : "Text-only example";
-      button.setAttribute("aria-label", `${example.title} (${exampleHasImage(example) ? "image" : "text only"})`);
+      const modality = exampleModality(example);
+      button.dataset.modality = modality;
+      button.title = `${modality === "text" ? "Text-only" : modality === "audio" ? "Audio" : "Image"} example`;
+      button.setAttribute("aria-label", `${example.title} (${modality === "text" ? "text only" : modality})`);
       const title = document.createElement("span");
       title.className = "example-title";
       title.textContent = example.title;
@@ -513,8 +722,14 @@ async function initialize() {
       button.dataset.image = sample.id;
       button.textContent = sample.title;
       button.setAttribute("aria-pressed", "false");
-      button.addEventListener("click", () => { if (!busy) void chooseImage(sample); });
+      button.addEventListener("click", () => { if (!busy) void chooseAttachment("image", sample); });
       $("image-samples").append(button);
+    }
+    for (const sample of audioSamples) {
+      const option = document.createElement("option");
+      option.value = sample.id;
+      option.textContent = sample.title;
+      $("audio-sample").append(option);
     }
     await selectExample(examples[0]);
     setBusy(false);

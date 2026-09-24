@@ -37,7 +37,7 @@ suffix removal triggers a complete recomputation. Decode failures synchronize
 and clear both physical KV and its token provenance. `reset_cache: true` is an
 internal diagnostic option for comparing cached and full-prefill scores.
 
-## Optional image worker
+## Optional image and audio worker
 
 `GEMMAJEV_VISION=1 bash scripts/build_runtime.sh` builds the separate
 `.runtime/build/bin/gemmajev-vision-worker` from an isolated source/build tree.
@@ -45,10 +45,10 @@ It links the pinned runtime's `mtmd` library with video support disabled and
 applies `gemma4-image-budget.patch` in addition to the raw-logits patch.
 The default text worker does not load this library or a projector.
 
-The image worker accepts `--mmproj` and `--image-tokens`, and a request can add
-one `image_path`. Only a trusted media marker is tokenized by `mtmd`; caller
+The multimodal worker accepts `--mmproj` and `--image-tokens`, and a request can add
+one `image_path` or `audio_path`. Only a trusted media marker is tokenized by `mtmd`; caller
 text remains literal. The unchanged decision prompt comes first inside the
-user turn, followed by image embeddings, their boundary tokens and the model
+user turn, followed by image or audio embeddings, their boundary tokens and the model
 response prefix. The last text token supplies the candidate logits.
 
 Image requests reuse an identical causal text prefix. KV positions belonging
@@ -63,6 +63,14 @@ the pinned library's bilinear interpolation. A 70-token budget produces
 pixel-identical to the upstream Gemma processor's bicubic interpolation.
 See the [Python and JSON API examples](../README.md#python-and-json-api)
 for image-conditioned decisions.
+
+Audio input is bounded PCM16, mono, 16 kHz RIFF/WAVE, from 40 ms to 30 s.
+The worker validates the complete file and chunk boundaries before allocating
+the waveform. The installed E4B and 12B projectors already contain their audio
+components. Audio embeddings use causal attention and can span microbatches;
+the image token budget does not limit audio. Requests report audio duration,
+sample rate, token count and encoding time. Text, image and audio transitions
+reset the cache; successive audio requests reuse only identical pre-audio text.
 
 `--self-test` reports build provenance and template prefixes without loading
 weights or initializing a GPU. The supported context is 512–4096 tokens in multiples of 256;

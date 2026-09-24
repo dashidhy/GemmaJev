@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import math
+import re
+import subprocess
 import threading
 import time
 import webbrowser
@@ -13,6 +15,8 @@ from importlib.resources import files
 from urllib.parse import urlsplit
 
 from .assets import workspace_root
+from .audio import MAX_AUDIO_BYTES
+from .demo_audio import AudioStore, prepare_samples
 from .demo_images import IMAGE_SAMPLES, MAX_IMAGE_BYTES, MAX_UPLOAD_BYTES, ImageStore
 from .request import validate_request
 
@@ -21,6 +25,7 @@ EXAMPLES = {
     "evidence_check": "Evidence check",
     "answer_usefulness": "Answer usefulness",
     "image_style": "Image style",
+    "audio_language": "Audio language",
 }
 
 
@@ -34,7 +39,7 @@ def load_example(name: str) -> dict:
 def _engine_factory(**kwargs):
     from .engine import GemmaJev
 
-    return GemmaJev(context_size=2048, vision=True, **kwargs)
+    return GemmaJev(context_size=2048, vision=True, audio=True, **kwargs)
 
 
 class Playground:
@@ -79,16 +84,20 @@ class Playground:
         with self._lock:
             self._load(model)
 
-    def run(self, model: str, request: dict, *, image_path=None) -> dict:
+    def run(self, model: str, request: dict, *, image_path=None, audio_path=None) -> dict:
         request = validate_request(request)
+        if image_path is not None and audio_path is not None:
+            raise ValueError("Choose one attachment: image or audio.")
         with self._lock:
             load_ms = self._load(model)
             try:
                 start = time.perf_counter()
-                probabilities = (
-                    self._engine.decide(request, image_path=image_path)
-                    if image_path is not None else self._engine.decide(request)
-                )
+                attachment = {}
+                if image_path is not None:
+                    attachment["image_path"] = image_path
+                elif audio_path is not None:
+                    attachment["audio_path"] = audio_path
+                probabilities = self._engine.decide(request, **attachment)
                 request_ms = (time.perf_counter() - start) * 1000
                 if (
                     set(probabilities) != set(request["options"])
@@ -142,11 +151,16 @@ class PlaygroundServer(ThreadingHTTPServer):
     daemon_threads = False
     block_on_close = True
 
-    def __init__(self, model, workspace, port, manager):
+    def __init__(self, model, workspace, port, manager, audio_samples=()):
         self.model = model
         self.manager = manager if manager is not None else Playground(workspace)
         self.operation = threading.Lock()
         self.images = ImageStore(workspace_root(workspace), samples=IMAGE_SAMPLES, max_bytes=MAX_UPLOAD_BYTES)
+        self.audio = AudioStore(workspace_root(workspace), samples=audio_samples)
+        self.audio_samples = [
+            {"id": row["id"], "title": row["title"], "url": f"/api/audio/{row['id']}",
+             "duration_seconds": row["duration_seconds"]} for row in audio_samples
+        ]
         super().__init__(("127.0.0.1", port), PlaygroundHandler, bind_and_activate=False)
         try:
             self.server_bind()
@@ -164,6 +178,7 @@ class PlaygroundServer(ThreadingHTTPServer):
             super().server_close()
         finally:
             self.images.close()
+            self.audio.close()
 
 
 class PlaygroundHandler(BaseHTTPRequestHandler):
@@ -174,7 +189,7 @@ class PlaygroundHandler(BaseHTTPRequestHandler):
         # Keep the terminal focused on engine startup and errors, not every asset.
         pass
 
-    def _send(self, status, body, content_type="application/json; charset=utf-8"):
+    def _send(self, status, body, content_type="application/json; charset=utf-8", headers=None):
         if isinstance(body, dict):
             body = json.dumps(body, allow_nan=False).encode("utf-8")
         self.send_response(status)
@@ -183,10 +198,12 @@ class PlaygroundHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.send_header(
             "Content-Security-Policy",
             "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; "
+            "img-src 'self' data:; media-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
             "base-uri 'none'; form-action 'none'",
         )
         self.end_headers()
@@ -198,6 +215,35 @@ class PlaygroundHandler(BaseHTTPRequestHandler):
 
     def _error(self, status, message):
         self._send(status, {"error": message})
+
+    def _send_audio(self, content):
+        headers = {"Accept-Ranges": "bytes"}
+        requested = self.headers.get("Range")
+        if requested is None:
+            self._send(200, content, "audio/wav", headers)
+            return
+        length = len(content)
+        match = re.fullmatch(r"bytes=([0-9]*)-([0-9]*)", requested.strip())
+        try:
+            if match is None or not any(match.groups()):
+                raise ValueError
+            first, last = match.groups()
+            if first:
+                start = int(first)
+                end = min(int(last), length - 1) if last else length - 1
+            else:
+                suffix = int(last)
+                if suffix <= 0:
+                    raise ValueError
+                start, end = max(0, length - suffix), length - 1
+            if start >= length or start > end:
+                raise ValueError
+        except ValueError:
+            headers["Content-Range"] = f"bytes */{length}"
+            self._send(416, {"error": "Requested audio range is not satisfiable."}, headers=headers)
+            return
+        headers["Content-Range"] = f"bytes {start}-{end}/{length}"
+        self._send(206, content[start:end + 1], "audio/wav", headers)
 
     def _local_request(self):
         host = self.headers.get("Host", "").lower()
@@ -218,7 +264,20 @@ class PlaygroundHandler(BaseHTTPRequestHandler):
         if not self._local_request():
             return
         path = urlsplit(self.path).path
-        if path.startswith("/api/images/"):
+        if path.startswith("/api/audio/"):
+            try:
+                content = self.server.audio.resolve(path.removeprefix("/api/audio/")).read_bytes()
+            except ValueError as error:
+                self._error(404, str(error))
+                return
+            except OverflowError as error:
+                self._error(413, str(error))
+                return
+            except OSError:
+                self._error(503, "Audio sample is unavailable. Restart the Playground or upload a WAV.")
+                return
+            self._send_audio(content)
+        elif path.startswith("/api/images/"):
             try:
                 content = self.server.images.resolve(path.removeprefix("/api/images/")).read_bytes()
             except ValueError as error:
@@ -241,13 +300,17 @@ class PlaygroundHandler(BaseHTTPRequestHandler):
                 "model": self.server.model,
                 "examples": [
                     {"id": name, "title": title, "request": load_example(name),
-                     **({"image_id": "sample_1"} if name == "image_style" else {})}
+                     "modality": {"image_style": "image", "audio_language": "audio"}.get(name, "text"),
+                     **({"image_id": "sample_1"} if name == "image_style" else {}),
+                     **({"audio_id": self.server.audio_samples[0]["id"]
+                         if self.server.audio_samples else None} if name == "audio_language" else {})}
                     for name, title in EXAMPLES.items()
                 ],
                 "image_samples": [
                     {"id": name, "title": value[0], "url": f"/api/images/{name}"}
                     for name, value in IMAGE_SAMPLES.items()
                 ],
+                "audio_samples": self.server.audio_samples,
             })
         else:
             self._error(404, "Not found.")
@@ -284,12 +347,44 @@ class PlaygroundHandler(BaseHTTPRequestHandler):
         except OSError:
             self._error(503, "Could not save the uploaded image.")
 
+    def _upload_audio(self):
+        if self.headers.get_content_type() != "audio/wav":
+            self._error(415, "Upload audio/wav bytes using the attachment picker.")
+            return
+        if "Transfer-Encoding" in self.headers:
+            self._error(400, "Chunked request bodies are not supported.")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            self._error(411, "A valid Content-Length is required.")
+            return
+        if not 0 < length <= MAX_AUDIO_BYTES:
+            self._error(413, "Audio exceeds the 20 MiB upload limit.")
+            return
+        try:
+            data = self.rfile.read(length)
+            if len(data) != length:
+                raise ValueError("Incomplete audio upload.")
+            self._send(200, self.server.audio.add(data))
+        except ValueError as error:
+            self._error(400, str(error))
+        except OverflowError as error:
+            self._error(413, str(error))
+        except (TimeoutError, ConnectionError):
+            self._error(408, "Audio upload timed out or was interrupted.")
+        except OSError:
+            self._error(503, "Could not save the uploaded audio.")
+
     def do_POST(self):
         if not self._local_request():
             return
         path = urlsplit(self.path).path
         if path == "/api/image":
             self._upload_image()
+            return
+        if path == "/api/audio":
+            self._upload_audio()
             return
         if path not in {"/api/decide", "/api/model"}:
             self._error(404, "Not found.")
@@ -320,7 +415,11 @@ class PlaygroundHandler(BaseHTTPRequestHandler):
                 raise ValueError("Choose E4B or 12B.")
             request = validate_request(body.get("request")) if path == "/api/decide" else None
             image_id = body.get("image_id") if path == "/api/decide" else None
+            audio_id = body.get("audio_id") if path == "/api/decide" else None
+            if image_id is not None and audio_id is not None:
+                raise ValueError("Choose one attachment: image or audio.")
             image_path = self.server.images.resolve(image_id) if image_id is not None else None
+            audio_path = self.server.audio.resolve(audio_id) if audio_id is not None else None
         except (ValueError, UnicodeError) as error:
             self._error(400, str(error))
             return
@@ -328,7 +427,10 @@ class PlaygroundHandler(BaseHTTPRequestHandler):
             self._error(408, "Request body timed out or was interrupted.")
             return
         except OSError:
-            self._error(503, "The selected image is unavailable. Choose or upload it again.")
+            self._error(503, "The selected attachment is unavailable. Choose or upload it again.")
+            return
+        except OverflowError as error:
+            self._error(413, str(error))
             return
         if not self.server.operation.acquire(blocking=False):
             self._error(409, "The engine is busy. Wait for the current operation to finish.")
@@ -339,11 +441,14 @@ class PlaygroundHandler(BaseHTTPRequestHandler):
                 self.server.model = model
                 self._send(200, {"model": model})
             else:
-                result = (
-                    self.server.manager.run(model, request, image_path=image_path)
-                    if image_path is not None else self.server.manager.run(model, request)
-                )
+                attachment = {}
+                if image_path is not None:
+                    attachment["image_path"] = image_path
+                elif audio_path is not None:
+                    attachment["audio_path"] = audio_path
+                result = self.server.manager.run(model, request, **attachment)
                 result["image_id"] = image_id
+                result["audio_id"] = audio_id
                 self.server.model = model
                 self._send(200, result)
         except (ValueError, RuntimeError, OSError, TimeoutError) as error:
@@ -355,17 +460,22 @@ class PlaygroundHandler(BaseHTTPRequestHandler):
             self.server.operation.release()
 
 
-def create_server(model="12b", workspace=None, port=7860, *, manager=None):
+def create_server(model="12b", workspace=None, port=7860, *, manager=None, audio_samples=()):
     """Bind a loopback port without loading a model or accepting requests yet."""
     if not isinstance(model, str) or model not in {"e4b", "12b"}:
         raise ValueError("Choose E4B or 12B.")
     if isinstance(port, bool) or not isinstance(port, int) or not 0 <= port <= 65535:
         raise ValueError("Port must be an integer from 0 to 65535.")
-    return PlaygroundServer(model, workspace, port, manager)
+    return PlaygroundServer(model, workspace, port, manager, audio_samples)
 
 
 def launch(model="12b", workspace=None, port=7860, open_browser=True):
-    server = create_server(model, workspace, port)
+    try:
+        samples = prepare_samples(workspace)
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        print(f"Audio examples unavailable: {error} You can still upload a WAV.", flush=True)
+        samples = []
+    server = create_server(model, workspace, port, audio_samples=samples)
     try:
         print(f"Loading Gemma 4 {model.upper()} inference engine...", flush=True)
         started = time.perf_counter()

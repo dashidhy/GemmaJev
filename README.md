@@ -2,6 +2,8 @@
 
 A simplified functionality reproduction of [Jev-style decisions](https://docs.typesafe.ai/introduction) with Gemma 4. Native multi-modal ability, finetuning free, runs locally on your machine.
 
+![GemmaJev Playground: image styles, text decisions, and spoken-language classification](docs/images/playground.gif)
+
 > **Disclaimer** - GemmaJev is NOT a full reproduction of TypeSafe's original Jev; see [Limitations](#limitations). This project is developed through ~100% vibe coding (powered by Codex w/ GPT-6 Astra). While tested, the code and documentation may contain critical bugs, hallucinations, or inaccuracies. Use at your own risk and verify critical results independently. If you encounter any problem, feel free to open an [issue](../../issues).
 
 > **Contributing** - Any interesting contribution is welcome. Feel free to [PR](../../pulls).
@@ -79,7 +81,7 @@ B = {option_id}: {option_description}
 
 ### Multi-modal inputs
 
-GemmaJev uses Gemma 4's native visual encoder to make decisions about images, such as classifying their content or visual style. The same `task`, `state`, `query` and `options` fields define the decision; the image is supplied separately. The output remains a probability mapping over the supplied option IDs.
+GemmaJev uses Gemma 4's native image and audio inputs to make decisions about visual content or spoken language. The same `task`, `state`, `query` and `options` fields define the decision; one image or audio clip is supplied separately. The output remains a probability mapping over the supplied option IDs.
 
 ## Benchmark Results
 
@@ -143,7 +145,7 @@ uv sync --locked --extra data
 uv run gemmajev setup --model 12b --vision
 ```
 
-Setup downloads and builds the pinned llama.cpp runtime, then downloads and verifies the selected model. `--vision` prepares both text and image workers plus the matching projector, as required by the Playground. Model downloads are approximately **4.80 GiB for E4B** and **6.50 GiB for 12B**, plus a **946 MiB / 167 MiB** projector respectively and runtime source/build space. Use `--model e4b` for E4B, or `--model all` to prepare both. Omit `--vision` for text-only API use.
+Setup downloads and builds the pinned llama.cpp runtime, then downloads and verifies the selected model. `--vision` prepares both text and multimodal workers plus the matching projector, as required by the Playground. Model downloads are approximately **4.80 GiB for E4B** and **6.50 GiB for 12B**, plus a **946 MiB / 167 MiB** projector respectively and runtime source/build space. Use `--model e4b` for E4B, or `--model all` to prepare both. Omit `--vision` for text-only API use.
 
 | Local directory | Contents |
 | --- | --- |
@@ -153,15 +155,15 @@ Setup downloads and builds the pinned llama.cpp runtime, then downloads and veri
 
 These directories are ignored by Git. The repository includes code, download manifests and measured-result metadata, not model weights, runtime binaries or dataset passages.
 
-### Demos
+### GemmaJev Playground
 
 ```bash
 uv run gemmajev demo --model 12b
 ```
 
-This launches a **GemmaJev Playground** with examples in your browser at `http://127.0.0.1:7860`. You can also edit the fields to test your own cases.
+This launches a **GemmaJev Playground** with examples in your browser. You can also edit the fields, upload images and audio to test your own cases.
 
-![GemmaJev Playground: image style tagging with editable options](docs/images/playground.png)
+![GemmaJev Playground: image styles, text decisions, and spoken-language classification](docs/images/playground.png)
 
 ### Python and JSON API
 
@@ -222,6 +224,26 @@ uv run gemmajev decide src/gemmajev/examples/image_style.json --model 12b \
   --image src/gemmajev/examples/images/sample_4.png
 ```
 
+Audio uses the same projector prepared by `setup --vision` (or `setup --audio`). The Python and CLI interfaces accept a PCM16, mono, 16 kHz WAV clip between 40 milliseconds and 30 seconds:
+
+```python
+import json
+from pathlib import Path
+from gemmajev import GemmaJev
+
+request = json.loads(Path("src/gemmajev/examples/audio_language.json").read_text())
+with GemmaJev(model="12b", audio=True) as model:
+    probabilities = model.decide(request, audio_path="speech.wav")
+    print(probabilities)
+```
+
+```bash
+uv run gemmajev decide src/gemmajev/examples/audio_language.json --model 12b \
+  --audio speech.wav
+```
+
+Pass either an image or audio attachment per decision. The Playground converts supported WAV recordings to the required audio format before upload.
+
 ### Benchmark
 
 Recompute all published local scores offline:
@@ -255,13 +277,10 @@ uv run ruff check .
 
 GemmaJev is inspired by [TypeSafe Jev](https://docs.typesafe.ai/introduction). We credit the TypeSafe team for the original Jev system that motivated this exploration.
 
-- **Simplified decision interface.** GemmaJev does not reproduce Jev's complete `Noul`, `Choice`, and `Score` I/O interfaces. It approximates one aspect of Jev-style decision-making by returning a probability distribution over user-defined options.
-- **Research toy.** This project is a research prototype. Production infrastructure and comprehensive inference optimization are outside its scope. Its benchmark results should not be interpreted as equivalence to Jev's complete service.
-- Decisions select among 2–26 supplied options. Task wording, option definitions and order can affect results.
-- Probabilities are normalized within that option set; they are not calibrated estimates of real-world correctness.
-- Knowledge and complex reasoning are clear weaknesses relative to the published Jev reference. Results on these datasets do not establish overall Jev equivalence or reveal its implementation.
-- Published scores retain the original measurements. Sampling and prompts are fixed, but runtime builds, cache boundaries and floating-point execution can produce small differences on reruns.
-- Local latency depends on input length, model size and cache reuse. Request timing excludes initial model loading and benchmark cooldowns.
+- **Simplified decision interface** - GemmaJev does not reproduce Jev's complete `Noul`, `Choice`, and `Score` I/O interfaces. It approximates one aspect of Jev-style decision-making by returning a probability distribution over user-defined options.
+- **Research toy** - This project is a research prototype. Production infrastructure and comprehensive inference optimization are outside its scope. Its benchmark results should not be interpreted as equivalence to Jev's complete service.
+- **No calibration** - The output probability distributions are not calibrated estimates of real-world correctness as promised in original Jev.
+- **Performance gap** - There are clear weaknesses relative to the published Jev reference, especially in the area of Knowledge and complex reasoning.
 
 ## License
 

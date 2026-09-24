@@ -15,7 +15,7 @@
         <h1>GemmaJev Playground</h1>
         <select id="model-select" aria-label="Model" disabled>
           <option value="e4b">Gemma 4 E4B</option>
-          <option value="12b">Gemma 4 12B</option>
+          <option value="12b" selected>Gemma 4 12B</option>
         </select>
       </header>
 
@@ -64,19 +64,33 @@
         </form>
 
         <div id="visual-column">
-          <section id="image-panel" aria-labelledby="image-title">
-            <div class="image-heading">
-              <h2 id="image-title">Image</h2>
-              <div class="image-actions">
-                <button type="button" id="upload-image" class="small-button" disabled>Upload image</button>
-                <button type="button" id="clear-image" class="small-button" disabled>Clear</button>
-                <input id="image-file" type="file" accept="image/png,image/jpeg" aria-label="Choose a PNG or JPEG image" hidden disabled>
+          <section id="attachment-panel" aria-labelledby="attachment-title">
+            <div class="attachment-heading">
+              <h2 id="attachment-title">Attachment</h2>
+              <div class="attachment-actions">
+                <button type="button" id="upload-attachment" class="small-button" disabled>Upload file</button>
+                <button type="button" id="clear-attachment" class="small-button" disabled>Clear</button>
+                <input id="attachment-file" type="file" accept="image/png,image/jpeg" aria-label="Choose an attachment" hidden disabled>
               </div>
             </div>
-            <div id="image-samples" aria-label="Image samples"></div>
-            <div id="image-frame">
+            <div id="attachment-samples">
+              <div id="image-samples" aria-label="Image samples"></div>
+              <select id="audio-sample" aria-label="Audio sample" hidden disabled>
+                <option value="" disabled>Choose an audio sample</option>
+              </select>
+            </div>
+            <div id="attachment-frame">
               <img id="image-preview" alt="Attached image" hidden>
-              <div id="image-placeholder">No image attached</div>
+              <div id="audio-player" hidden>
+                <div id="audio-name">Audio clip</div>
+                <div id="audio-controls">
+                  <button type="button" id="audio-play" disabled>Play</button>
+                  <input id="audio-seek" type="range" aria-label="Playback position" min="0" max="0" step="0.01" value="0" disabled>
+                  <output id="audio-time" for="audio-seek">0:00 / 0:00</output>
+                </div>
+              </div>
+              <audio id="audio-source" preload="metadata" hidden></audio>
+              <div id="attachment-placeholder">No attachment selected</div>
             </div>
           </section>
 
